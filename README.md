@@ -13,6 +13,28 @@ pytest
 ruff check .
 ```
 
+The package can be installed directly from the repository in editable mode while developing:
+
+```text
+python -m pip install -e ".[dev]"
+```
+
+Consumer projects should install a released version from PyPI:
+
+```text
+python -m pip install projectfoundry
+```
+
+To try the current `main` branch before a release, install it directly from GitHub:
+
+```text
+python -m pip install "projectfoundry @ git+https://github.com/MakoTime/ProjectFoundry.git@main"
+```
+
+Versions are made available by updating `__version__` in `src/projectfoundry/__init__.py`, committing
+the change, and pushing a matching `v<version>` tag, for example `v0.2.0`. Consumer projects can
+then reference that tag in their dependency configuration.
+
 ## Consumer project setup
 
 Install Project Foundry in a consumer project, then run the instruction setup command from that project root:

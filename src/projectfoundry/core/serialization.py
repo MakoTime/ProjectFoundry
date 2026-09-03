@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+
+UpgradeStep = Callable[[dict[str, Any]], dict[str, Any]]
+ProjectVersion = tuple[int, int, int]
+VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 
 class SerializerRegistry:
@@ -48,10 +53,51 @@ class SerializerRegistry:
 class ProjectSerializer:
     """Persist registered project objects to a small, versioned JSON document."""
 
-    format_version = 1
+    format_version = "1.0.0"
 
-    def __init__(self, registry: SerializerRegistry) -> None:
+    def __init__(
+        self,
+        registry: SerializerRegistry,
+        upgrades: dict[tuple[str, str], UpgradeStep] | None = None,
+    ) -> None:
         self.registry = registry
+        self._upgrades: dict[str, tuple[str, UpgradeStep]] = {}
+        for (from_version, to_version), upgrade in (upgrades or {}).items():
+            self.register_upgrade(from_version, to_version, upgrade)
+
+    def register_upgrade(
+        self,
+        from_version: str,
+        to_version: str,
+        upgrade: UpgradeStep,
+    ) -> None:
+        """Register a migration between two semantic project format versions."""
+        from_number = self._parse_version(from_version)
+        to_number = self._parse_version(to_version)
+        current_number = self._parse_version(self.format_version)
+        if not from_number < to_number <= current_number:
+            raise ValueError(
+                f"Invalid project format upgrade: {from_version} -> {to_version}"
+            )
+        if from_version in self._upgrades:
+            raise ValueError(f"Project format upgrade already registered: {from_version}")
+        self._upgrades[from_version] = (to_version, upgrade)
+
+    def check_version(self, path: str | Path) -> str:
+        """Return the serialized format version without creating project objects."""
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        return self._document_version(document)
+
+    def upgrade(self, path: str | Path, output_path: str | Path | None = None) -> bool:
+        """Upgrade a project file and return whether a migration was performed."""
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        original_version = self._document_version(document)
+        upgraded = self._upgrade_document(document)
+        if original_version == self.format_version:
+            return False
+        destination = Path(output_path) if output_path is not None else Path(path)
+        destination.write_text(json.dumps(upgraded, indent=2), encoding="utf-8")
+        return True
 
     def save_project(self, project, path: str | Path) -> None:
         """Save all canonical objects from a Project container."""
@@ -86,6 +132,7 @@ class ProjectSerializer:
 
     def load(self, path: str | Path) -> list[Any]:
         document = json.loads(Path(path).read_text(encoding="utf-8"))
+        document = self._upgrade_document(document)
         self._validate_document(document)
         objects = []
         records_by_guid = {}
@@ -176,3 +223,40 @@ class ProjectSerializer:
                 if block_guid in block_uids:
                     raise ValueError(f"Duplicate serialized block UID: {block_guid}")
                 block_uids.add(block_guid)
+
+    def _upgrade_document(self, document: Any) -> dict[str, Any]:
+        version = self._document_version(document)
+        if self._parse_version(version) > self._parse_version(self.format_version):
+            raise ValueError(f"Unsupported project format: {version}")
+        document["version"] = version
+        while self._parse_version(version) < self._parse_version(self.format_version):
+            try:
+                next_version, upgrade = self._upgrades[version]
+            except KeyError as error:
+                raise ValueError(f"No upgrade path for project format: {version}") from error
+            upgraded = upgrade(document)
+            if not isinstance(upgraded, dict):
+                raise ValueError(f"Project format upgrade {version} must return an object")
+            document = upgraded
+            version = next_version
+            document["version"] = version
+        return document
+
+    @staticmethod
+    def _document_version(document: Any) -> str:
+        if not isinstance(document, dict):
+            raise ValueError("Project document must be an object")
+        version = document.get("version")
+        if isinstance(version, int) and not isinstance(version, bool):
+            version = f"{version}.0.0"
+        if not isinstance(version, str) or VERSION_PATTERN.fullmatch(version) is None:
+            raise ValueError(f"Unsupported project format: {version}")
+        return version
+
+    @staticmethod
+    def _parse_version(version: str) -> ProjectVersion:
+        match = VERSION_PATTERN.fullmatch(version)
+        if match is None:
+            raise ValueError(f"Invalid project format version: {version}")
+        major, minor, fix = (int(part) for part in match.groups())
+        return major, minor, fix

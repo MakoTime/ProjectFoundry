@@ -16,6 +16,10 @@ class ExampleBlock(BlockObject):
         del path
 
 
+class VersionedProjectSerializer(ProjectSerializer):
+    format_version = "2.0.0"
+
+
 def test_project_serializer_round_trips_registered_objects(tmp_path):
     registry = SerializerRegistry()
     registry.register(
@@ -47,6 +51,23 @@ def test_project_serializer_rejects_unknown_versions(tmp_path):
         assert "Unsupported project format" in str(error)
     else:
         raise AssertionError("Unknown format versions must fail")
+
+
+def test_project_serializer_checks_and_applies_format_upgrades(tmp_path):
+    path = tmp_path / "project.json"
+    path.write_text('{"version": "1.0.0", "objects": []}', encoding="utf-8")
+    serializer = VersionedProjectSerializer(SerializerRegistry())
+    serializer.register_upgrade(
+        "1.0.0",
+        "2.0.0",
+        lambda document: {**document, "objects": document["objects"]},
+    )
+
+    assert serializer.check_version(path) == "1.0.0"
+    assert serializer.load(path) == []
+    assert serializer.upgrade(path) is True
+    assert serializer.check_version(path) == "2.0.0"
+    assert serializer.upgrade(path) is False
 
 
 def test_project_serializer_restores_block_relationships(tmp_path):
