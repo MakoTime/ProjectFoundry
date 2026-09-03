@@ -61,6 +61,10 @@ def latest_version_tag(root: Path) -> str | None:
     return max(versions)[1] if versions else None
 
 
+def tag_is_current(tag: str, root: Path) -> bool:
+    return _git("rev-parse", tag, cwd=root) == _git("rev-parse", "HEAD", cwd=root)
+
+
 def commit_subjects(root: Path, tag: str | None) -> list[str]:
     revision_range = f"{tag}..HEAD" if tag else "HEAD"
     output = _git("log", revision_range, "--format=%s", cwd=root)
@@ -133,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     root = repository_root()
     current = read_version(root / VERSION_RELATIVE_PATH)
     tag = latest_version_tag(root)
-    if args.pre_push and tag and tag[1:] == current:
+    if args.pre_push and tag and tag_is_current(tag, root):
         print(f"Release {current} is already prepared; push may continue.")
         return 0
     print("Select version increment: 1) patch  2) minor  3) major")

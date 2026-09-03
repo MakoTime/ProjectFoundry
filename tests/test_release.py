@@ -51,6 +51,7 @@ def test_pre_push_allows_a_version_with_a_matching_tag(tmp_path, monkeypatch, ca
     monkeypatch.setattr(release, "VERSION_RELATIVE_PATH", version_path.relative_to(tmp_path))
     monkeypatch.setattr(release, "repository_root", lambda: tmp_path)
     monkeypatch.setattr(release, "latest_version_tag", lambda root: "v0.1.0")
+    monkeypatch.setattr(release, "tag_is_current", lambda tag, root: True)
 
     assert release.main(["--pre-push"]) == 0
     assert "already prepared" in capsys.readouterr().out
