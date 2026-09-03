@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 projectfoundry-init-instructions = "projectfoundry.scripts.install_instructions:main"
+projectfoundry-release = "projectfoundry.scripts.release:main"
 
 [project.optional-dependencies]
 dev = [

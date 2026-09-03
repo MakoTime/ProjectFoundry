@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+python -m projectfoundry.scripts.release --pre-push

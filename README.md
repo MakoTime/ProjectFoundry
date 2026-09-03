@@ -35,6 +35,25 @@ Versions are made available by updating `__version__` in `src/projectfoundry/__i
 the change, and pushing a matching `v<version>` tag, for example `v0.2.0`. Consumer projects can
 then reference that tag in their dependency configuration.
 
+### Releases
+
+Enable the tracked pre-push hook once per clone:
+
+```text
+git config core.hooksPath .githooks
+```
+
+The hook asks whether the next release is a patch, minor, or major release, updates the version and
+`CHANGELOG.md`, and stops the push so those changes can be reviewed and committed. After committing,
+push the release commit and tag:
+
+```text
+git add src/projectfoundry/__init__.py CHANGELOG.md
+git commit -m "Release v0.2.0"
+git tag v0.2.0
+git push --follow-tags
+```
+
 ## Consumer project setup
 
 Install Project Foundry in a consumer project, then run the instruction setup command from that project root:
