@@ -1,5 +1,6 @@
 from projectfoundry.core import ObjectBase, Project
 from projectfoundry.tree import TreeManager, TreeModel, TreeNode
+from projectfoundry.tree.manager import TreeManager as ModuleTreeManager
 
 
 def test_project_tree_manager_registers_root_and_child_nodes():
@@ -38,3 +39,4 @@ def test_standalone_tree_manager_remains_constructible():
     manager.add_root_node(node)
 
     assert manager.get_root_nodes() == (node,)
+    assert TreeManager is ModuleTreeManager

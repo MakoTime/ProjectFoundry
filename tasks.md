@@ -16,3 +16,4 @@
 - [x] Add Project event notifications and subsystem synchronization
 - [x] Build cross-subsystem integration tests for one complete item
 - [x] Run full regression, lint, and package validation
+- [x] Add managed Project Foundry instruction propagation command

@@ -13,6 +13,16 @@ pytest
 ruff check .
 ```
 
+## Consumer project setup
+
+Install Project Foundry in a consumer project, then run the instruction setup command from that project root:
+
+```text
+projectfoundry-init-instructions
+```
+
+Use `--project-root PATH` to target another project, `--check` to inspect the current state, or `--remove` to remove only the managed Project Foundry block. Consumer-specific instructions outside the `<projectfoundry>` markers are preserved.
+
 ## Implemented foundations
 
 - Framework-neutral block objects with dependency invalidation and lifecycle callbacks

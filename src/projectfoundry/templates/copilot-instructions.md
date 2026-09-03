@@ -1,0 +1,27 @@
+## Project Foundry Instructions
+
+- Treat `Project` as the authoritative composition root for one project.
+- Keep `Project` independently constructible for tests and tooling.
+- Use `ProjectManager` for application-level active-project or singleton behavior.
+- Registries own canonical objects, blocks, and nodes; subsystems own references and projections.
+- Route add, remove, connect, rename, scene, and task mutations through `Project` APIs.
+- Base classes may expose ergonomic methods, but those methods must delegate to `Project`.
+- Store long-lived relationships as UIDs, never as object references.
+- Resolve related objects through `Project` or a project-owned registry at the point of use.
+- Reject duplicate UIDs, missing UIDs, cross-project references, and invalid relationships clearly.
+- `prepare()` gathers and validates processing inputs without mutating committed output state.
+- `process(prepared, progress_callback)` performs computation from prepared inputs.
+- `process()` must not mutate registries, tree state, scene state, or committed block output.
+- `commit(result)` is the only processing phase that updates committed block state.
+- Run `commit()` only after successful processing; failed processing must not partially commit.
+- Every dialog feature has separate `model.py`, `view.py`, and `factory.py` modules.
+- Popup/dialog editors and tab editors have separate model, view, and factory implementations.
+- Use mixins for shared apply, close, button-box, naming, and editor behavior.
+- Keep the import graph one-way: core, models, adapters, views, then application composition.
+- `core` must not import PySide6, PyVista, views, dialogs, or application modules.
+- Route tree, scene, table, task, and dialog mutations through `Project`.
+- PyVista adapters own runtime actors, not canonical domain objects.
+- Emit Project events only after successful mutations and identify affected UIDs.
+- Removal must clean dependent tree, scene, table, task, block, and UID references.
+- Add focused tests for lifecycle, dependency, serialization, ownership, UID, and model behavior.
+- Run the full test suite and Ruff before marking a task complete.
