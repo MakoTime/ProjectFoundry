@@ -15,6 +15,7 @@ from .core import (
 )
 from .scene import PyVistaSceneAdapter, SceneModel
 from .scene_table import RowData, SceneTableModel, TableManager
+from .scripts.install_instructions import update_instructions
 from .task_runner import QtTaskRunner, Task, TaskModel, TaskRunner, TaskStatus
 from .tree import TreeManager, TreeModel, TreeNode
 
@@ -45,5 +46,6 @@ __all__ = [
 	"UIDRef",
 	"UIDRegistry",
 	"QtTaskRunner",
+	"update_instructions",
 	"__version__",
 ]
