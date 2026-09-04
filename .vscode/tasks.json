@@ -4,25 +4,45 @@
         {
             "label": "Release: prepare",
             "type": "process",
-            "command": "${workspaceFolder}\\scripts\\release.ps1",
+            "command": "powershell.exe",
             "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\release.ps1",
                 "-VersionPart",
                 "${input:releaseVersionPart}"
             ],
-            "problemMatcher": []
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated"
+            }
         },
         {
             "label": "Release: commit, tag, and push",
             "type": "process",
-            "command": "${workspaceFolder}\\scripts\\release.ps1",
+            "command": "powershell.exe",
             "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\release.ps1",
                 "-VersionPart",
                 "${input:releaseVersionPart}",
                 "-Commit",
                 "-Tag",
                 "-Push"
             ],
-            "problemMatcher": []
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated"
+            }
         }
     ],
     "inputs": [
