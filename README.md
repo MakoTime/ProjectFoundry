@@ -37,22 +37,16 @@ then reference that tag in their dependency configuration.
 
 ### Releases
 
-Enable the tracked pre-push hook once per clone:
+Prepare a release from PowerShell by choosing which version section to increment:
 
 ```text
-git config core.hooksPath .githooks
+./scripts/release.ps1 -VersionPart patch -Commit -Tag -Push
 ```
 
-The hook asks whether the next release is a patch, minor, or major release, updates the version and
-`CHANGELOG.md`, and stops the push so those changes can be reviewed and committed. After committing,
-push the release commit and tag:
-
-```text
-git add src/projectfoundry/__init__.py CHANGELOG.md
-git commit -m "Release v0.2.0"
-git tag v0.2.0
-git push --follow-tags
-```
+Use `minor` or `major` instead of `patch` when appropriate. The command collects commit messages
+since the previous version tag, updates `CHANGELOG.md`, updates the package version, creates the
+release commit and tag, and pushes both. To review the generated changes first, omit `-Commit`,
+`-Tag`, and `-Push`.
 
 ## Consumer project setup
 

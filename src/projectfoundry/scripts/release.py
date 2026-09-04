@@ -61,10 +61,6 @@ def latest_version_tag(root: Path) -> str | None:
     return max(versions)[1] if versions else None
 
 
-def tag_is_current(tag: str, root: Path) -> bool:
-    return _git("rev-parse", tag, cwd=root) == _git("rev-parse", "HEAD", cwd=root)
-
-
 def commit_subjects(root: Path, tag: str | None) -> list[str]:
     revision_range = f"{tag}..HEAD" if tag else "HEAD"
     output = _git("log", revision_range, "--format=%s", cwd=root)
@@ -128,30 +124,55 @@ def prepare_release(section: str, root: Path | None = None) -> str:
     return next_version
 
 
+def finish_release(version: str, root: Path, *, commit: bool, tag: bool, push: bool) -> None:
+    if push and not (commit and tag):
+        raise ValueError("--push requires --commit and --tag")
+    if not (commit or tag or push):
+        return
+    if commit:
+        _git("add", str(VERSION_RELATIVE_PATH), str(CHANGELOG_RELATIVE_PATH), cwd=root)
+        _git("commit", "-m", f"Release v{version}", cwd=root)
+    if tag:
+        _git("tag", f"v{version}", cwd=root)
+    if push:
+        _git("push", "--follow-tags", cwd=root)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--pre-push", action="store_true", help="Prepare a release and stop the push"
+        "--version-part", choices=("patch", "minor", "major"),
+        help="Version section to increment",
     )
+    parser.add_argument("--commit", action="store_true", help="Create the release commit")
+    parser.add_argument("--tag", action="store_true", help="Create the release tag")
+    parser.add_argument("--push", action="store_true", help="Push the release commit and tag")
+    parser.add_argument("--dry-run", action="store_true", help="Show the next version only")
     args = parser.parse_args(argv)
     root = repository_root()
     current = read_version(root / VERSION_RELATIVE_PATH)
-    tag = latest_version_tag(root)
-    if args.pre_push and tag and tag_is_current(tag, root):
-        print(f"Release {current} is already prepared; push may continue.")
+    section = args.version_part
+    if section is None:
+        print("Select version increment: 1) patch  2) minor  3) major")
+        choice = input("Choice: ").strip()
+        section = {"1": "patch", "2": "minor", "3": "major"}.get(choice)
+        if section is None:
+            print("No release prepared.")
+            return 1
+    next_version = increment_version(current, section)
+    if args.dry_run:
+        print(f"Next version: {next_version}")
         return 0
-    print("Select version increment: 1) patch  2) minor  3) major")
-    choice = input("Choice: ").strip()
-    sections = {"1": "patch", "2": "minor", "3": "major"}
-    if choice not in sections:
-        print("No release prepared.")
-        return 1
-    next_version = prepare_release(sections[choice], root)
-    print(
-        f"Prepared release {next_version}. Review and commit the version and changelog "
-        "changes, then push again."
+    prepared_version = prepare_release(section, root)
+    finish_release(
+        prepared_version,
+        root,
+        commit=args.commit,
+        tag=args.tag,
+        push=args.push,
     )
-    return 1 if args.pre_push else 0
+    print(f"Prepared release {prepared_version}.")
+    return 0
 
 
 if __name__ == "__main__":

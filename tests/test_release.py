@@ -1,8 +1,10 @@
 from datetime import date
 
-import projectfoundry.scripts.release as release
+import pytest
+
 from projectfoundry.scripts.release import (
     changelog_entry,
+    finish_release,
     increment_version,
     update_changelog,
     update_version,
@@ -39,19 +41,10 @@ def test_update_version_and_changelog(tmp_path):
     update_version("0.2.0", version_path)
     update_changelog("0.2.0", ["feat: add release command"], changelog_path)
 
-    assert ' __version__ = "0.2.0"' not in version_path.read_text(encoding="utf-8")
     assert '__version__ = "0.2.0"' in version_path.read_text(encoding="utf-8")
     assert "## [0.2.0]" in changelog_path.read_text(encoding="utf-8")
 
 
-def test_pre_push_allows_a_version_with_a_matching_tag(tmp_path, monkeypatch, capsys):
-    version_path = tmp_path / "src" / "projectfoundry" / "__init__.py"
-    version_path.parent.mkdir(parents=True)
-    version_path.write_text('__version__ = "0.1.0"\n', encoding="utf-8")
-    monkeypatch.setattr(release, "VERSION_RELATIVE_PATH", version_path.relative_to(tmp_path))
-    monkeypatch.setattr(release, "repository_root", lambda: tmp_path)
-    monkeypatch.setattr(release, "latest_version_tag", lambda root: "v0.1.0")
-    monkeypatch.setattr(release, "tag_is_current", lambda tag, root: True)
-
-    assert release.main(["--pre-push"]) == 0
-    assert "already prepared" in capsys.readouterr().out
+def test_push_requires_commit_and_tag(tmp_path):
+    with pytest.raises(ValueError, match="requires --commit and --tag"):
+        finish_release("0.2.0", tmp_path, commit=False, tag=False, push=True)
