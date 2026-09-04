@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Release: prepare",
+            "type": "process",
+            "command": "${workspaceFolder}\\scripts\\release.ps1",
+            "args": [
+                "-VersionPart",
+                "${input:releaseVersionPart}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "Release: commit, tag, and push",
+            "type": "process",
+            "command": "${workspaceFolder}\\scripts\\release.ps1",
+            "args": [
+                "-VersionPart",
+                "${input:releaseVersionPart}",
+                "-Commit",
+                "-Tag",
+                "-Push"
+            ],
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "releaseVersionPart",
+            "type": "pickString",
+            "description": "Which version section should increase?",
+            "options": [
+                "patch",
+                "minor",
+                "major"
+            ],
+            "default": "patch"
+        }
+    ]
+}
