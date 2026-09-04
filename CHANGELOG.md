@@ -2,6 +2,12 @@
 
 All notable changes to Project Foundry are documented here.
 
+## [0.1.2] - 2026-09-04
+
+### Changed
+
+- Updated package test to move away from static version
+
 ## [0.1.1] - 2026-09-04
 
 ### Changed

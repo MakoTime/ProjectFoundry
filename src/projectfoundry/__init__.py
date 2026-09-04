@@ -19,7 +19,7 @@ from .scripts.install_instructions import update_instructions
 from .task_runner import QtTaskRunner, Task, TaskModel, TaskRunner, TaskStatus
 from .tree import TreeManager, TreeModel, TreeNode
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
 	"BlockObject",
