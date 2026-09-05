@@ -9,6 +9,9 @@
 - Route add, remove, connect, rename, scene, and task mutations through `Project` APIs.
 - Base classes may expose ergonomic methods, but those methods must delegate to `Project`.
 - Do not let views, Qt models, or adapters mutate registries or persistent relationships directly.
+- Keep application services above `Project`: services coordinate workflows, while `Project` owns domain invariants and canonical mutations.
+- Keep editor controllers above services: controllers open editors, pass target context, handle accept/cancel, and forward validated models.
+- Do not make a generic service or controller a second composition root; domain-specific workflows belong in application-level subclasses or compositions.
 
 ## UID relationships
 
@@ -20,6 +23,8 @@
 - Temporary local object references are acceptable inside one operation, task, editor session, scene session, or callback.
 - Serialization must persist UIDs, not memory addresses or runtime UI objects.
 - Do not serialize temporary editor objects, scene objects, Qt rows, or renderer actors.
+- For block editors, distinguish `block_uid` (canonical target), `node_uid` (tree launch context), `scene_uid` (scene-table launch context), and `parent_node_uid` (new-item creation context).
+- Do not use one ambiguous target UID when the source namespace matters.
 
 ## Block objects
 
@@ -55,6 +60,9 @@
 - Views contain Qt widgets, layout, and widget-to-model synchronization.
 - Factories construct and configure the correct model/view presentation.
 - Dialogs must not create or register domain items directly when a Project API exists.
+- Editor models hold draft state and validation; applying a dialog must not partially mutate Project state.
+- Editor views synchronize widgets into models; they do not own domain workflows.
+- Reusable editor controllers should own dialog lifecycle and accepted-model delivery, not domain-specific block creation.
 
 ## Dependency direction
 
@@ -67,6 +75,8 @@
 - Factories may import their views; views must not import their factories.
 - Use protocols or small contracts at subsystem boundaries to avoid circular imports.
 - Application composition is responsible for wiring Project, models, adapters, views, and dialogs together.
+- Main windows should compose dependencies and wire commands, but should not coordinate create/edit/process workflows.
+- Use application-level controllers and services for New/Edit commands from root nodes, tree nodes, and scene-table rows.
 
 ## Tree, scene, and table
 
@@ -80,6 +90,7 @@
 - Release temporary scene objects and loaded shape data during project shutdown.
 - Keep the Qt table model as a presentation adapter over the coupled scene/table manager.
 - Renderer actors are runtime resources owned by the rendering adapter, not by blocks or table rows.
+- The canonical block name is the source for synchronized tree and scene-table display names; projections must not become independent name owners.
 
 ## Events and lifecycle
 
@@ -92,6 +103,8 @@
 - Subsystems must unsubscribe from a Project when it is shut down.
 - Removal must clean dependent tree, scene/table, task, block, and UID references.
 - Repeated removal and destruction should be deterministic and harmless where practical.
+- Keep Qt/PyVista mutations on the GUI thread; worker threads may prepare and process data but must not commit, emit UI-facing project events, or update actors.
+- Explicitly stop timers and close/finalize embedded VTK render windows before dialog destruction; prevent queued preview renders after close.
 
 ## Serialization
 
@@ -110,3 +123,4 @@
 - Add integration coverage for one complete item across object, block, node, scene, table, task, dialog, and serializer layers.
 - Run the full test suite and Ruff before marking a task complete.
 - Do not mark a task complete until relevant focused tests and full regression checks pass.
+- Exercise complete application workflows, not only isolated models: New, tree Edit, scene-table Edit, processing, scene insertion, save/reopen, cancellation, and shutdown.
