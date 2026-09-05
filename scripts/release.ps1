@@ -14,5 +14,8 @@ if ($Tag) { $arguments += "--tag" }
 if ($Push) { $arguments += "--push" }
 if ($DryRun) { $arguments += "--dry-run" }
 
-python -m projectfoundry.scripts.release @arguments
+$venvPython = Join-Path $PSScriptRoot "..\.venv\Scripts\python.exe"
+$python = if (Test-Path $venvPython) { $venvPython } else { "python" }
+
+& $python -m projectfoundry.scripts.release @arguments
 exit $LASTEXITCODE
