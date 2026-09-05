@@ -2,6 +2,14 @@
 
 All notable changes to Project Foundry are documented here.
 
+## [0.2.0] - 2026-09-05
+
+### Changed
+
+- FIxed release requiring pydantic
+- Fixed demo test for CI
+- Updated foundry and added demo
+
 ## [0.1.2] - 2026-09-04
 
 ### Changed
