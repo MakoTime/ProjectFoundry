@@ -1,7 +1,7 @@
-from projectfoundry.core import BlockObject, ObjectBase, ProjectSerializer, SerializerRegistry
+from projectfoundry.core import BlockObject, EditedObject, ProjectSerializer, SerializerRegistry
 
 
-class ExampleObject(ObjectBase):
+class ExampleObject(EditedObject):
     type_name = "example"
 
 

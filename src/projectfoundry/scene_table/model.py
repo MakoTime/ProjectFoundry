@@ -6,16 +6,23 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
+from uuid import uuid4
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QIcon
+
+from projectfoundry.core.project import ProjectEventKind
+
+
+def _ignore_transparency_change(value: float) -> None:
+    del value
 
 
 class BaseColumn(IntEnum):
     NAME = 0
     VISIBLE = 1
     OBJECT = 2
-    PROGRESS = 3
+    TRANSPARENCY = 3
     SHAPES = 4
     REMOVE = 5
 
@@ -27,14 +34,17 @@ class CellObject:
 
 
 @dataclass
-class NormalizedProgressBar:
-    value: float = 0.0
-
-
-@dataclass
 class VisibleField:
     visible: bool
     on_change: Callable[[bool], Any]
+
+@dataclass
+class SiderBar:
+    value: float = 0.0
+    on_change: Callable[[float], Any] = _ignore_transparency_change
+    step: float = 0.05
+    min: float = 0.0
+    max: float = 1.0
 
 
 @dataclass
@@ -42,12 +52,234 @@ class RowData:
     name: str
     visible: VisibleField
     obj: CellObject
-    progress: NormalizedProgressBar = field(default_factory=NormalizedProgressBar)
+    transparency: SiderBar = field(default_factory=SiderBar)
     other: Any = None
     object_uid: str | None = None
 
     def uid(self) -> str | None:
         return self.object_uid or getattr(self.obj.obj, "guid", None)
+
+
+@dataclass(eq=False)
+class SceneObject:
+    block_uid: str
+    block_data: Any
+    scene_data: Any = None
+    scene_uid: str = field(default_factory=lambda: str(uuid4()))
+    visible: bool = True
+    transparency: float = 1.0
+
+    def set_visibility(self, visible: bool) -> None:
+        self.visible = bool(visible)
+
+    def set_transparency(self, transparency: float) -> None:
+        self.transparency = float(transparency)
+
+
+class SceneTableManager:
+    """Own coupled persistent scene entries and temporary scene objects."""
+
+    def __init__(self, project=None, artifact_loader=None) -> None:
+        self.project = project
+        self.artifact_loader = artifact_loader
+        self.scene_block_uids: list[str] = []
+        self.scene_objects: dict[str, SceneObject] = {}
+        self._callbacks: list[Callable[[ProjectEventKind, SceneObject | None], None]] = []
+        self._watched_blocks: dict[str, Any] = {}
+        self.table_manager = TableManager()
+        self.table_manager.scene_table_manager = self
+        if project is not None:
+            project.set_scene_table_manager(self)
+
+    def _watch_block(self, block) -> None:
+        if block.guid in self._watched_blocks:
+            return
+        block.add_output_callback(self._on_block_output)
+        block.add_invalidation_callback(self._on_block_invalidated)
+        self._watched_blocks[block.guid] = block
+
+    def _unwatch_block(self, block) -> None:
+        block.remove_output_callback(self._on_block_output)
+        block.remove_invalidation_callback(self._on_block_invalidated)
+        self._watched_blocks.pop(block.guid, None)
+
+    def _on_block_output(self, block) -> None:
+        if block.guid in self.scene_objects:
+            self.refresh_block(block.guid)
+
+    def _on_block_invalidated(self, block) -> None:
+        if block.guid in self.scene_objects:
+            self._emit(ProjectEventKind.BLOCK_INVALIDATED, self.scene_objects[block.guid])
+
+    def add_block(
+        self,
+        block_uid: str,
+        *,
+        scene_uid: str | None = None,
+        visible: bool = True,
+        transparency: float = 1.0,
+    ) -> SceneObject:
+        if self.project is None:
+            raise RuntimeError("SceneTableManager requires a project")
+        block = self.project.blocks.get(block_uid)
+        self._watch_block(block)
+        if block_uid in self.scene_objects:
+            return self.scene_objects[block_uid]
+        scene_data = None
+        if self.artifact_loader is not None and block.block_data.artifact is not None:
+            scene_data = self.project.load_block_artifact(block_uid, self.artifact_loader)
+        if scene_data is None:
+            scene_data = getattr(block, "scene_data", None)
+        scene_object = SceneObject(
+            block_uid=block_uid,
+            block_data=block.block_data.model_copy(deep=True),
+            scene_data=scene_data,
+            scene_uid=scene_uid or str(uuid4()),
+            visible=bool(visible),
+            transparency=float(transparency),
+        )
+        self.scene_block_uids.append(block_uid)
+        self.scene_objects[block_uid] = scene_object
+        self.table_manager.add_row(
+            RowData(
+                name=block.name,
+                visible=VisibleField(scene_object.visible, scene_object.set_visibility),
+                obj=CellObject(scene_object),
+                transparency=SiderBar(
+                    value=scene_object.transparency,
+                    on_change=scene_object.set_transparency,
+                ),
+                object_uid=scene_object.scene_uid,
+            )
+        )
+        self._emit(ProjectEventKind.SCENE_OBJECT_CREATED, scene_object)
+        return scene_object
+
+    def remove_block(self, block_uid: str) -> bool:
+        scene_object = self.scene_objects.pop(block_uid, None)
+        if scene_object is None:
+            return False
+        self._unwatch_block(self.project.blocks.get(block_uid))
+        self.scene_block_uids.remove(block_uid)
+        row = next(
+            (row for row in self.table_manager.get_data() if row.uid() == scene_object.scene_uid),
+            None,
+        )
+        if row is not None:
+            self.table_manager.remove_row(row)
+        self._emit(ProjectEventKind.SCENE_OBJECT_REMOVED, scene_object)
+        scene_object.scene_data = None
+        return True
+
+    def add_event_callback(
+        self,
+        callback: Callable[[ProjectEventKind, SceneObject | None], None],
+    ) -> None:
+        if callback not in self._callbacks:
+            self._callbacks.append(callback)
+            for scene_object in tuple(self.scene_objects.values()):
+                callback(ProjectEventKind.SCENE_OBJECT_CREATED, scene_object)
+
+    def remove_event_callback(
+        self,
+        callback: Callable[[ProjectEventKind, SceneObject | None], None],
+    ) -> None:
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+
+    def serialized_state(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "scene_uid": self.scene_objects[uid].scene_uid,
+                "block_uid": uid,
+                "visible": self.scene_objects[uid].visible,
+                "transparency": self.scene_objects[uid].transparency,
+            }
+            for uid in self.scene_block_uids
+        ]
+
+    def restore(self, records: list[dict[str, Any]]) -> None:
+        for record in records:
+            self.add_block(
+                record["block_uid"],
+                scene_uid=record.get("scene_uid"),
+                visible=record.get("visible", True),
+                transparency=record.get("transparency", 1.0),
+            )
+
+    def refresh_block(self, block_uid: str) -> SceneObject:
+        scene_object = self.scene_objects.get(block_uid)
+        if scene_object is None:
+            raise KeyError(f"Block is not in the scene: {block_uid}")
+        block = self.project.blocks.get(block_uid)
+        scene_object.block_data = block.block_data.model_copy(deep=True)
+        if self.artifact_loader is not None and block.block_data.artifact is not None:
+            scene_object.scene_data = self.project.load_block_artifact(
+                block_uid,
+                self.artifact_loader,
+            )
+        self._emit(ProjectEventKind.SCENE_OBJECT_REFRESHED, scene_object)
+        return scene_object
+
+    def rename_block(self, block_uid: str, name: str) -> bool:
+        scene_object = self.scene_objects.get(block_uid)
+        if scene_object is None:
+            return False
+        row = next(
+            (row for row in self.table_manager.get_data() if row.uid() == scene_object.scene_uid),
+            None,
+        )
+        if row is None:
+            return False
+        row.name = name
+        self._emit(ProjectEventKind.SCENE_OBJECT_REFRESHED, scene_object)
+        return True
+
+    def load_scene_artifacts(self) -> None:
+        """Load existing scene payloads without emitting renderer events."""
+        if self.project is None or self.artifact_loader is None:
+            return
+        for block_uid, scene_object in self.scene_objects.items():
+            block = self.project.blocks.get(block_uid)
+            if block.block_data.artifact is not None:
+                scene_object.scene_data = self.project.load_block_artifact(
+                    block_uid,
+                    self.artifact_loader,
+                )
+
+    def set_visibility(self, scene_uid: str, visible: bool) -> bool:
+        row = next(
+            (row for row in self.table_manager.get_data() if row.uid() == scene_uid),
+            None,
+        )
+        if row is None:
+            return False
+        scene_object = row.obj.obj
+        scene_object.set_visibility(visible)
+        self._emit(ProjectEventKind.SCENE_OBJECT_VISIBILITY_CHANGED, scene_object)
+        return True
+
+    def set_transparency(self, scene_uid: str, transparency: float) -> bool:
+        row = next(
+            (row for row in self.table_manager.get_data() if row.uid() == scene_uid),
+            None,
+        )
+        if row is None:
+            return False
+        scene_object = row.obj.obj
+        scene_object.set_transparency(transparency)
+        row.transparency.value = scene_object.transparency
+        self._emit(ProjectEventKind.SCENE_OBJECT_TRANSPARENCY_CHANGED, scene_object)
+        return True
+
+    def _emit(self, event: ProjectEventKind, scene_object: SceneObject | None) -> None:
+        for callback in tuple(self._callbacks):
+            callback(event, scene_object)
+
+    def clear(self) -> None:
+        for block_uid in tuple(self.scene_objects):
+            self.remove_block(block_uid)
+        self._callbacks.clear()
 
 
 class TableManager:
@@ -97,12 +329,20 @@ class TableManager:
 class SceneTableModel(QAbstractTableModel):
     """Present scene rows and handle visibility/removal interactions."""
 
-    Headers = ["Name", "Visible", "Object", "Progress", "Shapes", "Remove"]
-    NAME, VISIBLE, OBJECT, PROGRESS, SHAPES, REMOVE = range(6)
+    Headers = ["Name", "Visible", "Object", "Transparency", "Shapes", "Remove"]
+    NAME, VISIBLE, OBJECT, TRANSPARENCY, SHAPES, REMOVE = range(6)
 
     def __init__(self, table_manager: TableManager, parent=None) -> None:
         super().__init__(parent)
         self.table_manager = table_manager
+        self.scene_table_manager = getattr(table_manager, "scene_table_manager", None)
+        if self.scene_table_manager is not None:
+            self.scene_table_manager.add_event_callback(self._scene_table_changed)
+
+    def _scene_table_changed(self, event: str, scene_object: SceneObject | None) -> None:
+        del event, scene_object
+        self.beginResetModel()
+        self.endResetModel()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.table_manager.get_data())
@@ -125,10 +365,13 @@ class SceneTableModel(QAbstractTableModel):
             name=getattr(obj, "name", object_uid),
             visible=VisibleField(
                 bool(getattr(obj, "visible", True)),
-                lambda visible: self.table_manager.project.objects.get(object_uid)
-                and setattr(obj, "visible", bool(visible)),
+                obj.set_visibility,
             ),
             obj=CellObject(None),
+            transparency=SiderBar(
+                value=float(getattr(obj, "transparency", 1.0)),
+                on_change=obj.set_transparency,
+            ),
             object_uid=object_uid,
             **kwargs,
         )
@@ -140,6 +383,8 @@ class SceneTableModel(QAbstractTableModel):
             return False
         row_data = self.table_manager.get_data()[row]
         object_base = self._object_for_row(row_data)
+        if self.scene_table_manager is not None:
+            return self.scene_table_manager.remove_block(object_base.block_uid)
         self.beginRemoveRows(QModelIndex(), row, row)
         self.table_manager.remove_row(row_data)
         self.endRemoveRows()
@@ -183,6 +428,8 @@ class SceneTableModel(QAbstractTableModel):
     def _object_for_row(self, row_data: RowData) -> Any:
         if self.table_manager.project is None:
             return row_data.obj.obj
+        if self.scene_table_manager is not None:
+            return row_data.obj.obj
         return self.table_manager.project.objects.get(row_data.uid())
 
     def handle_click(self, index: QModelIndex) -> None:
@@ -200,8 +447,8 @@ class SceneTableModel(QAbstractTableModel):
                 return getattr(object_base, "name", row_data.name)
             if column == self.OBJECT:
                 return object_base
-            if column == self.PROGRESS:
-                return row_data.progress.value
+            if column == self.TRANSPARENCY:
+                return row_data.transparency.value
             if column == self.SHAPES:
                 return getattr(object_base, "shape_interface", row_data.other)
             if column == self.REMOVE:
@@ -224,14 +471,32 @@ class SceneTableModel(QAbstractTableModel):
         return flags
 
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
-        if not index.isValid() or index.column() != self.VISIBLE:
+        if not index.isValid() or index.column() not in (self.VISIBLE, self.TRANSPARENCY):
             return False
         if role not in (Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.EditRole):
             return False
-        visible = value in (Qt.CheckState.Checked, Qt.CheckState.Checked.value, True)
+        if index.column() == self.TRANSPARENCY:
+            row_data = self.table_manager.get_data()[index.row()]
+            try:
+                transparency = max(0.0, min(1.0, float(value)))
+            except (TypeError, ValueError):
+                return False
+            if self.scene_table_manager is not None:
+                return self.scene_table_manager.set_transparency(row_data.uid(), transparency)
+            row_data.transparency.value = transparency
+            row_data.transparency.on_change(transparency)
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole])
+            return True
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            visible = float(value) > 0
+        else:
+            visible = value in (Qt.CheckState.Checked, Qt.CheckState.Checked.value, True)
         row_data = self.table_manager.get_data()[index.row()]
         row_data.visible.visible = visible
-        row_data.visible.on_change(visible)
+        if self.scene_table_manager is not None:
+            self.scene_table_manager.set_visibility(row_data.uid(), visible)
+        else:
+            row_data.visible.on_change(visible)
         self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
         return True
 

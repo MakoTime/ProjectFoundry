@@ -6,18 +6,46 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from uuid import uuid4
 
+from pydantic import BaseModel
+
+from .artifacts import ArtifactStore
+
+
+class ArtifactMetadata(BaseModel):
+    """Persistent reference to a large block output stored outside project JSON."""
+
+    path: str
+    format: str
+    version: int = 1
+    checksum: str | None = None
+    valid: bool = True
+
+
+class BlockData(BaseModel):
+    """Validated, JSON-serializable persistent data for a block."""
+
+    artifact: ArtifactMetadata | None = None
+
 
 class BlockObject(ABC):
     """A processing node with explicit dependency and lifecycle semantics."""
 
-    def __init__(self, name: str = "", guid: str | None = None, comments: str = "") -> None:
+    def __init__(
+        self,
+        name: str = "",
+        guid: str | None = None,
+        comments: str = "",
+        block_data: BlockData | None = None,
+    ) -> None:
         self.name = name
         self.guid = guid or str(uuid4())
         self.comments = comments
+        self.block_data = block_data or BlockData()
         self._project = None
         self._valid = True
         self._destroyed = False
         self._invalidation_callbacks: list[Callable[[BlockObject], None]] = []
+        self._output_callbacks: list[Callable[[BlockObject], None]] = []
         self._change_callbacks: list[Callable[[BlockObject], None]] = []
         self._destruction_callbacks: list[Callable[[BlockObject], None]] = []
         self._parents: list[BlockObject] = []
@@ -129,6 +157,18 @@ class BlockObject(ABC):
         if callback not in self._invalidation_callbacks:
             self._invalidation_callbacks.append(callback)
 
+    def remove_invalidation_callback(self, callback: Callable[[BlockObject], None]) -> None:
+        if callback in self._invalidation_callbacks:
+            self._invalidation_callbacks.remove(callback)
+
+    def add_output_callback(self, callback: Callable[[BlockObject], None]) -> None:
+        if callback not in self._output_callbacks:
+            self._output_callbacks.append(callback)
+
+    def remove_output_callback(self, callback: Callable[[BlockObject], None]) -> None:
+        if callback in self._output_callbacks:
+            self._output_callbacks.remove(callback)
+
     def add_change_callback(self, callback: Callable[[BlockObject], None]) -> None:
         if callback not in self._change_callbacks:
             self._change_callbacks.append(callback)
@@ -158,10 +198,49 @@ class BlockObject(ABC):
         if dependent:
             self.destroy()
 
-    def commit(self, prepared: object | None = None) -> BlockObject:
-        del prepared
+    def commit(
+        self,
+        prepared: object | None = None,
+        artifact_store: ArtifactStore | None = None,
+    ) -> BlockObject:
+        if artifact_store is not None:
+            artifact = self.block_data.artifact
+            if artifact is None:
+                raise ValueError("Block data must define an artifact before persistence")
+            checksum = artifact_store.write_atomic(
+                artifact.path,
+                lambda path: self.persist_result(prepared, path),
+            )
+            self.block_data.artifact = artifact.model_copy(
+                update={"checksum": checksum, "valid": True}
+            )
         self.validate()
+        for callback in tuple(self._output_callbacks):
+            callback(self)
         return self
+
+    def persist_result(self, result: object | None, path: str) -> None:
+        """Write a processed result to an artifact path.
+
+        Block types with structured results should override this method.
+        """
+        if not isinstance(result, bytes):
+            raise NotImplementedError("Block must implement persist_result for non-byte results")
+        with open(path, "wb") as artifact:
+            artifact.write(result)
+
+    def release_result(self, result: object | None) -> None:
+        """Release optional runtime resources held by a processed result."""
+        del result
+
+    def retain_result(self, result: object | None) -> bool:
+        """Return whether a processed result should remain cached in memory."""
+        del result
+        return True
+
+    def serialise_data(self) -> dict:
+        """Return persistent block data in a JSON-compatible form."""
+        return self.block_data.model_dump(mode="json")
 
     @abstractmethod
     def prepare(self) -> object:

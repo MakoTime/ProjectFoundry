@@ -4,9 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtWidgets import QDialogButtonBox, QLineEdit
 
 from .button_box import EditorButtonBoxImplementation
+
+
+class EditorNameMixin:
+    """Provide a shared name field for views editing named models."""
+
+    def create_name_editor(self) -> QLineEdit:
+        self.name_edit = QLineEdit(self)
+        self.name_edit.setText(str(getattr(self.model, "name", "")))
+        return self.name_edit
+
+    def update_model(self):
+        self.model.name = self.name_edit.text()
+        return super().update_model()
 
 
 class EditorApplyMixin:

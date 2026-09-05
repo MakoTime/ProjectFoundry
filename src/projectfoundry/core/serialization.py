@@ -8,6 +8,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from ..tree import TreeNode
+
 UpgradeStep = Callable[[dict[str, Any]], dict[str, Any]]
 ProjectVersion = tuple[int, int, int]
 VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -19,6 +21,8 @@ class SerializerRegistry:
     def __init__(self) -> None:
         self._factories: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._serializers: dict[str, Callable[[Any], dict[str, Any]]] = {}
+        self._block_factories: dict[str, Callable[[dict[str, Any]], Any]] = {}
+        self._block_serializers: dict[str, Callable[[Any], dict[str, Any]]] = {}
 
     def register(
         self,
@@ -44,6 +48,32 @@ class SerializerRegistry:
             return self._serializers[type_name](value)
         except KeyError as error:
             raise KeyError(f"Unknown serialized type: {type_name}") from error
+
+    def register_block(
+        self,
+        type_name: str,
+        factory: Callable[[dict[str, Any]], Any],
+        serializer: Callable[[Any], dict[str, Any]] | None = None,
+    ) -> None:
+        """Register a block factory and serializer independently of project objects."""
+        if not type_name:
+            raise ValueError("A block serializer type name is required")
+        if type_name in self._block_factories and self._block_factories[type_name] is not factory:
+            raise ValueError(f"Block type already registered: {type_name}")
+        self._block_factories[type_name] = factory
+        self._block_serializers[type_name] = serializer or self._default_serializer
+
+    def create_block(self, type_name: str, record: dict[str, Any]) -> Any:
+        try:
+            return self._block_factories[type_name](record)
+        except KeyError as error:
+            raise KeyError(f"Unknown serialized block type: {type_name}") from error
+
+    def block_payload(self, type_name: str, value: Any) -> dict[str, Any]:
+        try:
+            return self._block_serializers[type_name](value)
+        except KeyError as error:
+            raise KeyError(f"Unknown serialized block type: {type_name}") from error
 
     @staticmethod
     def _default_serializer(value: Any) -> dict[str, Any]:
@@ -100,12 +130,99 @@ class ProjectSerializer:
         return True
 
     def save_project(self, project, path: str | Path) -> None:
-        """Save all canonical objects from a Project container."""
-        self.save(project.objects.values(), path)
+        """Save persistent blocks, tree state, and scene/table state."""
+        Path(path).write_text(
+            json.dumps(self.project_document(project), indent=2),
+            encoding="utf-8",
+        )
+
+    def project_document(self, project) -> dict[str, Any]:
+        """Return the JSON-compatible persistent project document."""
+        return {
+            "version": self.format_version,
+            "blocks": self._block_records(project),
+            "tree": [self._tree_record(project, node) for node in project.nodes.values()],
+            "scene_table": (
+                project.scene_table_manager.serialized_state()
+                if project.scene_table_manager is not None
+                else []
+            ),
+        }
+
+    def save_blocks(self, project, path: str | Path) -> None:
+        """Save persistent blocks and their UID relationships."""
+        records = self._block_records(project)
+        document = {"version": self.format_version, "blocks": records}
+        Path(path).write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _block_records(project) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": getattr(block, "type_name", type(block).__name__),
+                "block_uid": block.guid,
+                "name": block.name,
+                "comments": block.comments,
+                "data": block.serialise_data(),
+                "child_uids": list(project.block_child_uids(block.guid)),
+            }
+            for block in project.blocks.values()
+        ]
+
+    @staticmethod
+    def _object_block_uid(project, object_uid: str) -> str:
+        if project.blocks.contains(object_uid):
+            return object_uid
+        return project.objects.get(object_uid).block_uid
+
+    @classmethod
+    def _tree_record(cls, project, node) -> dict[str, Any]:
+        object_uid = getattr(node, "object_uid", None)
+        return {
+            "node_uid": node.guid,
+            "name": node.name,
+            "parent_uid": getattr(node, "parent_uid", None),
+            "block_uid": cls._object_block_uid(project, object_uid) if object_uid else None,
+            "child_uids": list(getattr(node, "child_uids", ())),
+            "expanded": bool(getattr(node, "expanded", False)),
+        }
+
+    def load_blocks(self, path: str | Path) -> list[Any]:
+        """Load independently registered blocks and restore UID relationships."""
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        if document.get("version") != self.format_version:
+            raise ValueError(f"Unsupported project format: {document.get('version')}")
+        records = document.get("blocks")
+        if not isinstance(records, list):
+            raise ValueError("Project document blocks must be a list")
+        blocks = []
+        blocks_by_uid = {}
+        for record in records:
+            block_uid = record.get("block_uid")
+            if not isinstance(block_uid, str) or not block_uid:
+                raise ValueError("Serialized block requires a non-empty block_uid")
+            if block_uid in blocks_by_uid:
+                raise ValueError(f"Duplicate serialized block UID: {block_uid}")
+            block = self.registry.create_block(record["type"], record)
+            block.guid = block_uid
+            block.name = record["name"]
+            block.comments = record.get("comments", "")
+            blocks.append(block)
+            blocks_by_uid[block_uid] = block
+        for record in records:
+            parent = blocks_by_uid[record["block_uid"]]
+            for child_uid in record.get("child_uids", []):
+                try:
+                    parent.add_child_block_object(blocks_by_uid[child_uid])
+                except KeyError as error:
+                    raise ValueError(f"Unknown block child UID: {child_uid}") from error
+        return blocks
 
     def save(self, objects: Iterable[Any], path: str | Path) -> None:
         records = []
         for value in objects:
+            if getattr(value, "temporary", False):
+                raise ValueError("Temporary objects cannot be serialized")
             type_name = getattr(value, "type_name", type(value).__name__)
             block_object = getattr(value, "block_object", None)
             project = getattr(value, "_project", None)
@@ -169,6 +286,9 @@ class ProjectSerializer:
 
     def load_into_project(self, path: str | Path, project) -> list[Any]:
         """Load validated objects into a Project in registration/link phases."""
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+        if "blocks" in document:
+            return self.load_document(document, project)
         objects = self.load(path)
         existing_object_uids = {value.guid for value in project.objects.values()}
         existing_block_uids = {value.guid for value in project.blocks.values()}
@@ -184,18 +304,173 @@ class ProjectSerializer:
             raise ValueError("Loaded block UID already exists in project")
         for value in objects:
             project.add_object(value)
-        try:
-            for value in objects:
-                block_object = getattr(value, "block_object", None)
-                if block_object is None:
-                    continue
-                for child in block_object.child_block_objects:
-                    project.connect_blocks(block_object.guid, child.guid)
-        except Exception:
-            for value in reversed(objects):
-                project.remove_object(value.guid)
-            raise
         return objects
+
+    def load_document(self, document: dict[str, Any], project) -> list[Any]:
+        """Load a decoded project document into a Project."""
+        if "blocks" in document:
+            return self._load_project_state(document, project)
+        raise ValueError("Project document must contain block state")
+
+    def _load_project_state(self, document: dict[str, Any], project) -> list[Any]:
+        if document.get("version") != self.format_version:
+            raise ValueError(f"Unsupported project format: {document.get('version')}")
+        self._validate_project_state(document, project)
+        if project.scene_table_manager is None:
+            from ..scene_table import SceneTableManager
+
+            SceneTableManager(project)
+        blocks = self._blocks_from_records(document.get("blocks"))
+        existing = {block.guid for block in project.blocks.values()}
+        if existing.intersection(block.guid for block in blocks):
+            raise ValueError("Loaded block UID already exists in project")
+        for block in blocks:
+            project.add_block(block)
+        existing_node_uids = {node.guid for node in project.nodes.values()}
+        original_scene_blocks = list(project.scene_table_manager.scene_block_uids)
+        original_scene_table = project.scene_table_manager.serialized_state()
+        try:
+            for record in document["blocks"]:
+                for child_uid in record.get("child_uids", []):
+                    project.connect_blocks(record["block_uid"], child_uid)
+            self._restore_tree(document.get("tree", []), project)
+            self._restore_scene_table(document.get("scene_table", []), project)
+        except Exception:
+            for node in tuple(project.nodes.values()):
+                if node.guid not in existing_node_uids:
+                    project.remove_node(node.guid)
+            for block in reversed(blocks):
+                project.remove_block(block.guid)
+            project.scene_table_manager.scene_block_uids[:] = original_scene_blocks
+            project.scene_table_manager.clear()
+            project.scene_table_manager.restore(original_scene_table)
+            raise
+        return blocks
+
+    @staticmethod
+    def _validate_project_state(document: dict[str, Any], project) -> None:
+        blocks = document.get("blocks")
+        if not isinstance(blocks, list):
+            raise ValueError("Project document blocks must be a list")
+        block_uids = set()
+        for record in blocks:
+            if not isinstance(record, dict):
+                raise ValueError("Serialized block records must be objects")
+            block_uid = record.get("block_uid")
+            if not isinstance(block_uid, str) or not block_uid:
+                raise ValueError("Serialized block requires a non-empty block_uid")
+            if block_uid in block_uids:
+                raise ValueError(f"Duplicate serialized block UID: {block_uid}")
+            if project.blocks.contains(block_uid):
+                raise ValueError(f"Loaded block UID already exists in project: {block_uid}")
+            block_uids.add(block_uid)
+        for record in blocks:
+            for child_uid in record.get("child_uids", []):
+                if child_uid not in block_uids:
+                    raise ValueError(f"Unknown block child UID: {child_uid}")
+
+        tree = document.get("tree", [])
+        if not isinstance(tree, list):
+            raise ValueError("Project document tree must be a list")
+        node_uids = set()
+        for record in tree:
+            if not isinstance(record, dict):
+                raise ValueError("Serialized tree records must be objects")
+            node_uid = record.get("node_uid")
+            if not isinstance(node_uid, str) or not node_uid:
+                raise ValueError("Serialized tree node requires a non-empty node_uid")
+            if node_uid in node_uids or project.nodes.contains(node_uid):
+                raise ValueError(f"Duplicate serialized tree node UID: {node_uid}")
+            node_uids.add(node_uid)
+            block_uid = record.get("block_uid")
+            if block_uid is not None and block_uid not in block_uids:
+                raise ValueError(f"Unknown tree block UID: {block_uid}")
+        for record in tree:
+            parent_uid = record.get("parent_uid")
+            if parent_uid is not None and parent_uid not in node_uids:
+                raise ValueError(f"Unknown tree parent UID: {parent_uid}")
+
+        scene_table = document.get("scene_table", [])
+        if not isinstance(scene_table, list):
+            raise ValueError("Project document scene_table must be a list")
+        scene_block_uids = set()
+        for record in scene_table:
+            if not isinstance(record, dict):
+                raise ValueError("Serialized scene_table records must be objects")
+            block_uid = record.get("block_uid")
+            if not isinstance(block_uid, str) or not block_uid:
+                raise ValueError("Serialized scene entry requires a non-empty block_uid")
+            if block_uid not in block_uids:
+                raise ValueError(f"Unknown scene block UID: {block_uid}")
+            if block_uid in scene_block_uids:
+                raise ValueError(f"Duplicate serialized scene block UID: {block_uid}")
+            scene_block_uids.add(block_uid)
+
+    def _blocks_from_records(self, records: Any) -> list[Any]:
+        if not isinstance(records, list):
+            raise ValueError("Project document blocks must be a list")
+        blocks = []
+        blocks_by_uid = {}
+        for record in records:
+            block_uid = record.get("block_uid")
+            if not isinstance(block_uid, str) or not block_uid:
+                raise ValueError("Serialized block requires a non-empty block_uid")
+            if block_uid in blocks_by_uid:
+                raise ValueError(f"Duplicate serialized block UID: {block_uid}")
+            block = self.registry.create_block(record["type"], record)
+            block.guid = block_uid
+            block.name = record["name"]
+            block.comments = record.get("comments", "")
+            blocks.append(block)
+            blocks_by_uid[block_uid] = block
+        for record in records:
+            parent = blocks_by_uid[record["block_uid"]]
+            for child_uid in record.get("child_uids", []):
+                try:
+                    parent.add_child_block_object(blocks_by_uid[child_uid])
+                except KeyError as error:
+                    raise ValueError(f"Unknown block child UID: {child_uid}") from error
+        return blocks
+
+    @staticmethod
+    def _restore_tree(records: Any, project) -> None:
+        if not isinstance(records, list):
+            raise ValueError("Project document tree must be a list")
+        nodes = {}
+        for record in records:
+            block_uid = record.get("block_uid")
+            if block_uid is not None:
+                project.blocks.get(block_uid)
+            node = TreeNode(record["name"], uid=record["node_uid"])
+            node.parent_uid = record.get("parent_uid")
+            node.expanded = bool(record.get("expanded", False))
+            node._serialized_block_uid = block_uid
+            nodes[node.guid] = node
+        pending = dict(nodes)
+        while pending:
+            progress = False
+            for node_uid, node in tuple(pending.items()):
+                parent_uid = node.parent_uid
+                if parent_uid is not None and parent_uid not in nodes:
+                    raise ValueError(f"Unknown tree parent UID: {parent_uid}")
+                if parent_uid is not None and parent_uid in pending:
+                    continue
+                if parent_uid is None:
+                    project.add_node(node)
+                else:
+                    project.add_node(node, parent_uid=parent_uid)
+                node.object_uid = node._serialized_block_uid
+                del node._serialized_block_uid
+                del pending[node_uid]
+                progress = True
+            if not progress:
+                raise ValueError("Tree relationships contain a cycle")
+
+    @staticmethod
+    def _restore_scene_table(records: Any, project) -> None:
+        if not isinstance(records, list):
+            raise ValueError("Project document scene_table must be a list")
+        project.scene_table_manager.restore(records)
 
     def _validate_document(self, document: Any) -> None:
         if not isinstance(document, dict):

@@ -12,6 +12,8 @@ def test_runner_completes_tasks_in_order_and_reports_progress():
     assert first.progress == 1.0
     assert second.result == "done"
     assert [task.name for task in finished] == ["First", "Second"]
+    assert first not in runner.tasks
+    assert second not in runner.tasks
     runner.shutdown()
 
 

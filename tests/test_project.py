@@ -1,6 +1,16 @@
 import pytest
 
-from projectfoundry.core import BlockObject, ObjectBase, Project, ProjectError, UIDRef
+from projectfoundry.core import (
+    ArtifactMetadata,
+    ArtifactStore,
+    BlockData,
+    BlockObject,
+    EditedObject,
+    Project,
+    ProjectError,
+    UIDRef,
+)
+from projectfoundry.scene_table import SceneTableManager
 from projectfoundry.tree import TreeNode
 
 
@@ -15,10 +25,14 @@ class ExampleBlock(BlockObject):
         del path
 
 
+class ArtifactBlockData(BlockData):
+    artifact: ArtifactMetadata | None = None
+
+
 def test_project_registers_objects_blocks_and_nodes_by_uid():
     project = Project()
     block = ExampleBlock("Block")
-    obj = ObjectBase("Object", block_object=block)
+    obj = EditedObject("Object", block_object=block)
     node = TreeNode("Object", node_object=obj)
 
     block_ref = project.add_block(block)
@@ -89,26 +103,28 @@ def test_project_rejects_missing_relationships_without_mutation():
 
 def test_project_scene_membership_and_selection_are_uid_only():
     project = Project()
-    obj = ObjectBase("Object")
-    project.add_object(obj)
+    block = ExampleBlock("Object")
+    project.add_block(block)
+    SceneTableManager(project)
 
-    project.add_to_scene(obj.guid)
-    selected = project.select_object(obj.guid)
+    project.add_to_scene(block.guid)
+    selected = project.select_object(block.guid)
 
-    assert project.scene_object_uids == [obj.guid]
-    assert selected == UIDRef(obj.guid)
-    assert project.selected_object_uid == obj.guid
-    assert project.remove_from_scene(obj.guid)
+    assert project.scene_table_manager.scene_block_uids == [block.guid]
+    assert selected == UIDRef(block.guid)
+    assert project.selected_object_uid == block.guid
+    assert project.remove_from_scene(block.guid)
     assert project.selected_object_uid is None
 
 
 def test_project_removes_object_and_all_owned_relationships():
     project = Project()
     block = ExampleBlock("Block")
-    obj = ObjectBase("Object")
+    obj = EditedObject("Object")
     node = TreeNode("Object", node_object=obj)
     project.add_block(block)
     project.add_object(obj, block_uid=block.guid)
+    SceneTableManager(project)
     project.add_node(node, object_uid=obj.guid)
     project.add_to_scene(obj.guid)
 
@@ -118,7 +134,7 @@ def test_project_removes_object_and_all_owned_relationships():
     assert not project.objects.contains(obj.guid)
     assert not project.blocks.contains(block.guid)
     assert not project.nodes.contains(node.guid)
-    assert project.scene_object_uids == []
+    assert project.scene_table_manager.scene_block_uids == []
 
 
 def test_project_removes_nested_nodes_by_uid():
@@ -133,3 +149,20 @@ def test_project_removes_nested_nodes_by_uid():
     assert not project.nodes.contains(root.guid)
     assert not project.nodes.contains(child.guid)
     assert project.tree.get_root_nodes() == ()
+
+
+def test_project_loads_block_artifact_by_uid(tmp_path):
+    store = ArtifactStore(tmp_path)
+    store.write_atomic("mesh.bin", lambda path: path.write_bytes(b"mesh"))
+    block = ExampleBlock(
+        "Block",
+        block_data=ArtifactBlockData(
+            artifact=ArtifactMetadata(path="mesh.bin", format="bin")
+        ),
+    )
+    project = Project(store)
+    project.add_block(block)
+
+    loaded = project.load_block_artifact(block.guid, lambda path: path.read_bytes())
+
+    assert loaded == b"mesh"

@@ -97,3 +97,10 @@ class SceneModel:
             return
         self.objects.clear()
         self.select(None)
+
+    def close(self) -> None:
+        if self.project is not None:
+            self.project.remove_event_callback(self._on_project_event)
+        self.clear()
+        self._selection_callbacks.clear()
+        self._visibility_callbacks.clear()

@@ -13,8 +13,9 @@ from .task import BlockTask, Task, TaskStatus
 class TaskRunner:
     """Run tasks sequentially while exposing lifecycle callbacks."""
 
-    def __init__(self, project=None) -> None:
+    def __init__(self, project=None, completion_dispatcher=None) -> None:
         self.project = project
+        self.completion_dispatcher = completion_dispatcher
         self.tasks: list[Task] = []
         self._next_id = 1
         self._paused = False
@@ -22,15 +23,24 @@ class TaskRunner:
         self._resume_event.set()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="projectfoundry")
         self._futures: dict[int, Future] = {}
+        self._completion_events: dict[int, Event] = {}
         self._lock = Lock()
         self._task_added: list[Callable[[Task], None]] = []
         self._task_updated: list[Callable[[Task], None]] = []
         self._task_finished: list[Callable[[Task], None]] = []
         self._block_bindings: dict[str, dict] = {}
+        self._closed = False
 
     @property
     def paused(self) -> bool:
         return self._paused
+
+    @property
+    def has_pending_tasks(self) -> bool:
+        return any(
+            task.status in (TaskStatus.QUEUED, TaskStatus.PAUSED, TaskStatus.RUNNING)
+            for task in self.tasks
+        )
 
     def add_task_added_callback(self, callback: Callable[[Task], None]) -> None:
         self._task_added.append(callback)
@@ -46,9 +56,16 @@ class TaskRunner:
         name: str,
         work: Callable[..., object],
         on_finished: Callable[[Task], None] | None = None,
+        block_uid: str | None = None,
     ) -> Task:
         with self._lock:
-            task = Task(name=name, work=work, on_finished=on_finished, task_id=self._next_id)
+            task = Task(
+                name=name,
+                work=work,
+                on_finished=on_finished,
+                task_id=self._next_id,
+                block_uid=block_uid,
+            )
             self._next_id += 1
             if self._paused:
                 task.status = TaskStatus.PAUSED
@@ -125,8 +142,8 @@ class TaskRunner:
             binding["name"],
             lambda progress: binding["task"].process(binding["prepared"], progress),
             on_finished=lambda task: self._finish_block_binding(binding, task),
+            block_uid=binding["block_uid"],
         )
-        engine_task.block_uid = binding["block_uid"]
         return engine_task
 
     def _block_invalidated(self, block_object) -> None:
@@ -155,7 +172,12 @@ class TaskRunner:
     def _finish_block_binding(self, binding: dict, task: Task) -> None:
         if task.status is TaskStatus.COMPLETED:
             try:
-                binding["task"].block_object.commit(task.result)
+                block_object = binding["task"].block_object
+                artifact_store = self.project.artifact_store if self.project is not None else None
+                block_object.commit(task.result, artifact_store)
+                if not block_object.retain_result(task.result):
+                    block_object.release_result(task.result)
+                    task.result = None
             except Exception as error:
                 task.error = str(error)
                 task.status = TaskStatus.FAILED
@@ -193,11 +215,15 @@ class TaskRunner:
 
     def wait_for_done(self, timeout: float | None = None) -> bool:
         futures = tuple(self._futures.values())
+        completion_events = tuple(self._completion_events.values())
         for future in futures:
             try:
                 future.result(timeout=timeout)
             except Exception:
                 pass
+        if self.completion_dispatcher is None:
+            for completion_event in completion_events:
+                completion_event.wait(timeout=timeout)
         return True
 
     def clear(self) -> None:
@@ -207,12 +233,17 @@ class TaskRunner:
                 self.cancel(task)
         self.tasks.clear()
         self._futures.clear()
+        self._completion_events.clear()
         for binding in self._block_bindings.values():
             binding["task"].block_object.remove_invalidation_callback(self._block_invalidated)
         self._block_bindings.clear()
         self._next_id = 1
 
     def shutdown(self, wait: bool = True) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.clear()
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
     def _start_next(self) -> None:
@@ -225,6 +256,7 @@ class TaskRunner:
             return
         task.status = TaskStatus.RUNNING
         self._notify(self._task_updated, task)
+        self._completion_events[task.task_id] = Event()
         future = self._executor.submit(self._run_task, task)
         self._futures[task.task_id] = future
         future.add_done_callback(lambda completed: self._task_done(task, completed))
@@ -240,6 +272,15 @@ class TaskRunner:
 
     def _task_done(self, task: Task, future: Future) -> None:
         if task.status is TaskStatus.CANCELLED:
+            self._completion_events.get(task.task_id, Event()).set()
+            return
+        if self.completion_dispatcher is not None:
+            self.completion_dispatcher((task, future))
+            return
+        self._complete_task(task, future)
+
+    def _complete_task(self, task: Task, future: Future) -> None:
+        if task.status is TaskStatus.CANCELLED:
             return
         try:
             task.result = future.result()
@@ -251,7 +292,12 @@ class TaskRunner:
             task.status = TaskStatus.COMPLETED
         self._notify(self._task_updated, task)
         self._notify_finished(task)
+        if task.status is TaskStatus.COMPLETED:
+            with self._lock:
+                if task in self.tasks:
+                    self.tasks.remove(task)
         self._start_next()
+        self._completion_events.get(task.task_id, Event()).set()
 
     def _notify_finished(self, task: Task) -> None:
         if task.on_finished is not None:

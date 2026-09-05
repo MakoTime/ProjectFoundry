@@ -3,8 +3,9 @@
 from .model import (
     BaseColumn,
     CellObject,
-    NormalizedProgressBar,
     RowData,
+    SceneObject,
+    SceneTableManager,
     SceneTableModel,
     TableManager,
     VisibleField,
@@ -13,8 +14,9 @@ from .model import (
 __all__ = [
     "BaseColumn",
     "CellObject",
-    "NormalizedProgressBar",
     "RowData",
+    "SceneObject",
+    "SceneTableManager",
     "SceneTableModel",
     "TableManager",
     "VisibleField",

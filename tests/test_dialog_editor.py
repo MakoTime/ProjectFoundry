@@ -4,6 +4,7 @@ from projectfoundry.dialogs.base import (
     DialogEditorFactory,
     DialogEditorModel,
     DialogEditorView,
+    EditorController,
     EditorFactory,
     EditorModel,
     EditorView,
@@ -29,6 +30,55 @@ class ExampleDialogModel(DialogEditorModel):
 
 class ExampleTabModel(TabEditorModel):
     pass
+
+
+def test_editor_controller_returns_accepted_model_and_cleans_up():
+    class Dialog:
+        DialogCode = type("DialogCode", (), {"Accepted": 1})
+
+        def __init__(self, result):
+            self.result = result
+            self.deleted = False
+
+        def exec(self):
+            return self.result
+
+        def deleteLater(self):
+            self.deleted = True
+
+    dialog = Dialog(1)
+    model = ExampleModel()
+
+    class Factory:
+        @staticmethod
+        def create(parent, **target):
+            del parent, target
+            return dialog, model
+
+    assert EditorController(Factory).open() is model
+    assert dialog.deleted
+
+
+def test_editor_controller_returns_none_when_cancelled():
+    class Dialog:
+        DialogCode = type("DialogCode", (), {"Accepted": 1})
+
+        def exec(self):
+            return 0
+
+        def deleteLater(self):
+            self.deleted = True
+
+    dialog = Dialog()
+
+    class Factory:
+        @staticmethod
+        def create(parent, **target):
+            del parent, target
+            return dialog, ExampleModel()
+
+    assert EditorController(Factory).open() is None
+    assert dialog.deleted
 
 
 def test_popup_editor_applies_model_and_notifies_once():

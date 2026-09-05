@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, TypeVar
 
 from ..tree import TreeManager
+from .artifacts import ArtifactStore
 from .block_object import BlockObject
-from .object import ObjectBase
+from .object import EditedObject
 from .references import UIDRef
 
 T = TypeVar("T")
@@ -17,11 +19,22 @@ class ProjectError(ValueError):
     """Base error for invalid project operations."""
 
 
+class ProjectEventKind(str, Enum):
+    """Typed project and scene lifecycle event names."""
+
+    SCENE_OBJECT_CREATED = "scene_object_created"
+    SCENE_OBJECT_REMOVED = "scene_object_removed"
+    SCENE_OBJECT_REFRESHED = "scene_object_refreshed"
+    SCENE_OBJECT_VISIBILITY_CHANGED = "scene_object_visibility_changed"
+    SCENE_OBJECT_TRANSPARENCY_CHANGED = "scene_object_transparency_changed"
+    BLOCK_INVALIDATED = "block_invalidated"
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectEvent:
     """A synchronous notification emitted after a Project mutation."""
 
-    kind: str
+    kind: ProjectEventKind | str
     uid: str | None = None
     related_uid: str | None = None
 
@@ -67,24 +80,44 @@ class UIDRegistry:
 class Project:
     """Own canonical objects and UID-only project relationships."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        artifact_store: ArtifactStore | None = None,
+        scene_table_manager=None,
+    ) -> None:
         self.objects = UIDRegistry("object")
         self.blocks = UIDRegistry("block")
         self.nodes = UIDRegistry("node")
         self.tree = TreeManager(self)
-        self.scene_object_uids: list[str] = []
         self.selected_object_uid: str | None = None
         self._block_children: dict[str, list[str]] = {}
         self._block_parents: dict[str, list[str]] = {}
         self._block_dependencies: dict[tuple[str, str], bool] = {}
         self._event_callbacks: list[Any] = []
+        self.artifact_store = artifact_store
+        self.scene_table_manager = scene_table_manager
 
     def shutdown(self) -> None:
         """Release project-owned runtime services before replacement."""
+        if self.scene_table_manager is not None:
+            self.scene_table_manager.clear()
 
     def add_event_callback(self, callback) -> None:
         if callback not in self._event_callbacks:
             self._event_callbacks.append(callback)
+
+    def load_block_artifact(self, block_uid: str, loader) -> object:
+        """Lazily load a block's disk-backed artifact by block UID."""
+        if self.artifact_store is None:
+            raise RuntimeError("Project has no artifact store")
+        block = self.blocks.get(block_uid)
+        if block.block_data.artifact is None:
+            raise ValueError(f"Block has no artifact: {block_uid}")
+        return self.artifact_store.load(block.block_data.artifact.path, loader)
+
+    def resolve_block(self, uid: str) -> BlockObject:
+        """Resolve a block or node UID to its canonical project block."""
+        return self.blocks.get(self._resolve_block_uid(uid))
 
     def remove_event_callback(self, callback) -> None:
         if callback in self._event_callbacks:
@@ -96,7 +129,7 @@ class Project:
 
     def add_object(
         self,
-        object_base: ObjectBase,
+        object_base: EditedObject,
         *,
         block_uid: str | None = None,
         node_uid: str | None = None,
@@ -126,6 +159,21 @@ class Project:
         self._emit(ProjectEvent("block_added", block.guid))
         return reference
 
+    def add_block_with_node(self, block: BlockObject, node: Any, *, parent_uid: str) -> UIDRef:
+        """Add a block and its tree node after validating both project relationships."""
+        if getattr(block, "_project", None) not in (None, self):
+            raise ProjectError("Block belongs to another project")
+        if getattr(node, "_project", None) not in (None, self):
+            raise ProjectError("Node belongs to another project")
+        if self.blocks.contains(block.guid):
+            raise ProjectError(f"Duplicate block UID: {block.guid}")
+        if self.nodes.contains(node.guid):
+            raise ProjectError(f"Duplicate node UID: {node.guid}")
+        self.nodes.get(parent_uid)
+        self.add_block(block)
+        self.add_node(node, object_uid=block.guid, parent_uid=parent_uid)
+        return UIDRef(block.guid)
+
     def add_node(
         self,
         node: Any,
@@ -134,7 +182,8 @@ class Project:
         parent_uid: str | None = None,
     ) -> UIDRef:
         if object_uid is not None:
-            self.objects.get(object_uid)
+            if not self.objects.contains(object_uid):
+                self.blocks.get(object_uid)
         if parent_uid is not None:
             self.nodes.get(parent_uid)
         if getattr(node, "_project", None) not in (None, self):
@@ -185,30 +234,74 @@ class Project:
         return tuple(self._block_children.get(parent_uid, ()))
 
     def add_to_scene(self, object_uid: str) -> UIDRef:
-        self.objects.get(object_uid)
-        if object_uid not in self.scene_object_uids:
-            self.scene_object_uids.append(object_uid)
-            self._emit(ProjectEvent("scene_object_added", object_uid))
-        return UIDRef(object_uid)
+        if self.scene_table_manager is None:
+            raise ProjectError("Project requires a scene/table manager")
+        block_uid = self._resolve_block_uid(object_uid)
+        was_present = block_uid in self.scene_table_manager.scene_objects
+        self.scene_table_manager.add_block(block_uid)
+        if not was_present:
+            self._emit(ProjectEvent(ProjectEventKind.SCENE_OBJECT_CREATED, block_uid))
+        return UIDRef(block_uid)
+
+    def set_scene_table_manager(self, manager) -> None:
+        self.scene_table_manager = manager
+        manager.project = self
+
+    def _resolve_block_uid(self, uid: str) -> str:
+        if self.blocks.contains(uid):
+            return uid
+        if self.scene_table_manager is not None:
+            for block_uid, scene_object in self.scene_table_manager.scene_objects.items():
+                if scene_object.scene_uid == uid:
+                    return block_uid
+            try:
+                row = self.scene_table_manager.table_manager.get_row(uid)
+            except (KeyError, ValueError):
+                pass
+            else:
+                return row.obj.obj.block_uid
+        if self.objects.contains(uid):
+            object_base = self.objects.get(uid)
+            block_uid = getattr(object_base, "block_uid", None)
+            if block_uid is None and object_base.block_object is not None:
+                block_uid = object_base.block_object.guid
+            if block_uid is None:
+                raise ProjectError(f"Object has no block UID: {uid}")
+            self.blocks.get(block_uid)
+            return block_uid
+        if self.nodes.contains(uid):
+            node = self.nodes.get(uid)
+            object_uid = getattr(node, "object_uid", None)
+            if object_uid is None:
+                raise ProjectError(f"Tree node has no object reference: {uid}")
+            return self._resolve_block_uid(object_uid)
+        raise ProjectError(f"Unknown scene UID: {uid}")
+
+    def add_block_to_scene(self, block_uid: str) -> UIDRef:
+        return self.add_to_scene(block_uid)
+
+    def remove_block_from_scene(self, block_uid: str) -> bool:
+        if self.scene_table_manager is not None:
+            removed = self.scene_table_manager.remove_block(block_uid)
+            if removed:
+                self._emit(ProjectEvent(ProjectEventKind.SCENE_OBJECT_REMOVED, block_uid))
+                if self.selected_object_uid == block_uid:
+                    self.selected_object_uid = None
+                    self._emit(ProjectEvent("selection_changed", None))
+            return removed
+        raise ProjectError("Project requires a scene/table manager")
 
     def remove_from_scene(self, object_uid: str) -> bool:
-        if object_uid not in self.scene_object_uids:
-            return False
-        self.scene_object_uids.remove(object_uid)
-        self._emit(ProjectEvent("scene_object_removed", object_uid))
-        if self.selected_object_uid == object_uid:
-            self.selected_object_uid = None
-            self._emit(ProjectEvent("selection_changed", None))
-        return True
+        return self.remove_block_from_scene(self._resolve_block_uid(object_uid))
 
     def select_object(self, object_uid: str | None) -> UIDRef | None:
         if object_uid is not None:
-            self.objects.get(object_uid)
+            self._resolve_block_uid(object_uid)
         self.selected_object_uid = object_uid
         self._emit(ProjectEvent("selection_changed", object_uid))
         return UIDRef(object_uid) if object_uid is not None else None
 
-    def remove_object(self, object_uid: str) -> ObjectBase:
+    def remove_object(self, object_uid: str) -> EditedObject:
         object_base = self.objects.get(object_uid)
         self.remove_from_scene(object_uid)
         for node in self.nodes.values():
@@ -253,7 +346,7 @@ class Project:
         self._emit(ProjectEvent("node_removed", node_uid))
         return node
 
-    def rename_object(self, object_uid: str, name: str) -> ObjectBase:
+    def rename_object(self, object_uid: str, name: str) -> EditedObject:
         object_base = self.objects.get(object_uid)
         name = str(name).strip()
         if not name:
@@ -264,6 +357,37 @@ class Project:
                 node.name = name
         self._emit(ProjectEvent("object_renamed", object_uid))
         return object_base
+
+    def rename_block(self, block_uid: str, name: str) -> BlockObject:
+        block = self.blocks.get(block_uid)
+        name = str(name).strip()
+        if not name:
+            raise ProjectError("Block name cannot be empty")
+        block.name = name
+        for node in self.nodes.values():
+            if getattr(node, "object_uid", None) == block_uid:
+                node.name = name
+        if self.scene_table_manager is not None:
+            self.scene_table_manager.rename_block(block_uid, name)
+        self._emit(ProjectEvent("block_renamed", block_uid))
+        return block
+
+    def update_block(self, block_uid: str, *, name: str, block_data) -> BlockObject:
+        """Apply validated block data and name as one project mutation."""
+        block = self.blocks.get(block_uid)
+        name = str(name).strip()
+        if not name:
+            raise ProjectError("Block name cannot be empty")
+        block.name = name
+        block.block_data = block_data
+        block.mark_changed()
+        for node in self.nodes.values():
+            if getattr(node, "object_uid", None) == block_uid:
+                node.name = name
+        if self.scene_table_manager is not None:
+            self.scene_table_manager.refresh_block(block_uid)
+        self._emit(ProjectEvent("block_updated", block_uid))
+        return block
 
     def disconnect_blocks(self, parent_uid: str, child_uid: str) -> bool:
         children = self._block_children.get(parent_uid, [])
@@ -285,7 +409,8 @@ class Project:
             pending.extend(self._block_children.get(current, ()))
 
     def clear(self) -> None:
-        self.scene_object_uids.clear()
+        if self.scene_table_manager is not None:
+            self.scene_table_manager.clear()
         self.selected_object_uid = None
         self._block_children.clear()
         self._block_parents.clear()

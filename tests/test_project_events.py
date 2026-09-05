@@ -1,41 +1,47 @@
-from projectfoundry.core import ObjectBase, Project, ProjectEvent
-from projectfoundry.scene import SceneModel
+from projectfoundry.core import BlockObject, Project, ProjectEvent
+from projectfoundry.scene_table import SceneTableManager
+
+
+class ExampleBlock(BlockObject):
+    def prepare(self):
+        return None
+
+    def process(self, prepared, progress_callback=None):
+        return prepared
+
+    def serialise(self, path):
+        del path
 
 
 def test_project_emits_mutation_events():
     project = Project()
     events = []
     project.add_event_callback(events.append)
-    obj = ObjectBase("Object")
+    block = ExampleBlock("Object")
+    project.add_block(block)
+    SceneTableManager(project)
 
-    project.add_object(obj)
-    project.add_to_scene(obj.guid)
-    project.select_object(obj.guid)
-    project.rename_object(obj.guid, "Renamed")
-    project.remove_from_scene(obj.guid)
+    project.add_to_scene(block.guid)
+    project.select_object(block.guid)
+    block.name = "Renamed"
+    project.remove_from_scene(block.guid)
 
     assert [event.kind for event in events] == [
-        "object_added",
-        "scene_object_added",
+        "block_added",
+        "scene_object_created",
         "selection_changed",
-        "object_renamed",
         "scene_object_removed",
         "selection_changed",
     ]
     assert all(isinstance(event, ProjectEvent) for event in events)
 
 
-def test_project_scene_model_receives_external_selection_changes():
+def test_project_scene_table_manager_receives_scene_requests():
     project = Project()
-    obj = ObjectBase("Object")
-    project.add_object(obj)
-    project.add_to_scene(obj.guid)
-    scene = SceneModel(project)
-    selected = []
-    scene.add_selection_callback(selected.append)
+    block = ExampleBlock("Object")
+    project.add_block(block)
+    scene = SceneTableManager(project)
 
-    project.select_object(obj.guid)
+    project.add_to_scene(block.guid)
 
-    assert scene.selected_object_uid == obj.guid
-    assert scene.selected_object is obj
-    assert selected == [obj]
+    assert scene.scene_block_uids == [block.guid]

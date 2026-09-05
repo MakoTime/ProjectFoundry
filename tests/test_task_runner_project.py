@@ -1,3 +1,5 @@
+from threading import current_thread
+
 from projectfoundry.core import BlockObject, Project
 from projectfoundry.task_runner import TaskRunner, TaskStatus
 
@@ -65,4 +67,28 @@ def test_project_runner_orders_invalid_uid_dependencies():
 
     assert parent_task.status is TaskStatus.COMPLETED
     assert order == ["prepare:Child", "process:Child", "prepare:Parent", "process:Parent"]
+    runner.shutdown()
+
+
+def test_completion_dispatcher_moves_commit_and_output_to_dispatch_thread():
+    project = Project()
+    block = ExampleBlock("Block")
+    project.add_block(block)
+    block.invalidate()
+    completion = []
+    output_threads = []
+    block.add_output_callback(lambda value: output_threads.append(current_thread()))
+    runner = TaskRunner(project, completion_dispatcher=completion.append)
+
+    task = runner.enqueue_block_task("Block", BlockWork(block))
+    runner.wait_for_done()
+
+    assert task.status is TaskStatus.RUNNING
+    assert len(completion) == 1
+    assert output_threads == []
+
+    runner._complete_task(*completion[0])
+
+    assert task.status is TaskStatus.COMPLETED
+    assert output_threads == [current_thread()]
     runner.shutdown()

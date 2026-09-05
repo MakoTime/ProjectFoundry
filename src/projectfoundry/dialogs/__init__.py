@@ -8,8 +8,10 @@ from .base import (
 	EditorButtonBoxImplementation,
 	EditorButtonsMixin,
 	EditorCloseMixin,
+	EditorController,
 	EditorFactory,
 	EditorModel,
+	EditorNameMixin,
 	EditorNamingMixin,
 	EditorView,
 	HasEditorButtons,
@@ -18,6 +20,7 @@ from .base import (
 	TabEditorModel,
 	TabEditorView,
 )
+from .base.editor.model import BlockEditorModel
 
 __all__ = [
 	"DialogEditorFactory",
@@ -27,10 +30,13 @@ __all__ = [
 	"EditorButtonBoxImplementation",
 	"EditorButtonsMixin",
 	"EditorCloseMixin",
+	"EditorController",
 	"EditorFactory",
+	"EditorNameMixin",
 	"EditorModel",
 	"EditorNamingMixin",
 	"EditorView",
+	"BlockEditorModel",
 	"HasEditorButtons",
 	"PopupEditorView",
 	"TabEditorFactory",

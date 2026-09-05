@@ -1,4 +1,4 @@
-from projectfoundry.core import ObjectBase, Project
+from projectfoundry.core import EditedObject, Project
 from projectfoundry.tree import TreeManager, TreeModel, TreeNode
 from projectfoundry.tree.manager import TreeManager as ModuleTreeManager
 
@@ -18,7 +18,7 @@ def test_project_tree_manager_registers_root_and_child_nodes():
 
 def test_project_tree_model_renames_canonical_object_and_aliases():
     project = Project()
-    obj = ObjectBase("Old")
+    obj = EditedObject("Old")
     project.add_object(obj)
     first = TreeNode("Old", node_object=obj)
     second = TreeNode("Alias", node_object=obj)

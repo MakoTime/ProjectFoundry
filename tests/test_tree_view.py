@@ -1,10 +1,10 @@
-from projectfoundry.core import ObjectBase
+from projectfoundry.core import EditedObject
 from projectfoundry.tree import TreeNode
 from projectfoundry.view_templates.tree import TreeView, TreeViewFactory
 
 
 def test_tree_view_factory_selects_nodes():
-    obj = ObjectBase("Object")
+    obj = EditedObject("Object")
     node = TreeNode("Object", node_object=obj)
     view = TreeViewFactory.create([node])
 

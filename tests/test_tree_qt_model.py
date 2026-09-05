@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QApplication
 
-from projectfoundry.core import ObjectBase
+from projectfoundry.core import EditedObject
 from projectfoundry.tree import TreeNode
 from projectfoundry.tree.qt_model import TreeModel
 
@@ -8,8 +8,8 @@ app = QApplication.instance() or QApplication([])
 
 
 def test_tree_model_exposes_hierarchy_and_unique_names():
-    first = ObjectBase("Object")
-    second = ObjectBase("Object 001")
+    first = EditedObject("Object")
+    second = EditedObject("Object 001")
     first_node = TreeNode(first.name, node_object=first)
     second_node = TreeNode(second.name, node_object=second)
     first_node.add_child(second_node)
@@ -24,8 +24,8 @@ def test_tree_model_exposes_hierarchy_and_unique_names():
 
 
 def test_tree_model_rejects_duplicate_edit():
-    first = ObjectBase("First")
-    second = ObjectBase("Second")
+    first = EditedObject("First")
+    second = EditedObject("Second")
     nodes = [TreeNode(first.name, node_object=first), TreeNode(second.name, node_object=second)]
     model = TreeModel(nodes)
 

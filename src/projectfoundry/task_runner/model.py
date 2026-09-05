@@ -7,7 +7,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 from .qt_runner import QtTaskRunner
-from .task import Task
+from .task import Task, TaskStatus
 
 
 class TaskModel(QAbstractTableModel):
@@ -22,7 +22,7 @@ class TaskModel(QAbstractTableModel):
         self.tasks: list[Task] = []
         runner.task_added.connect(self._task_added)
         runner.task_updated.connect(self._task_updated)
-        runner.task_finished.connect(self._task_updated)
+        runner.task_finished.connect(self._task_finished)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.tasks)
@@ -64,3 +64,15 @@ class TaskModel(QAbstractTableModel):
         except ValueError:
             return
         self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1))
+
+    def _task_finished(self, task: Task) -> None:
+        if task.status is not TaskStatus.COMPLETED:
+            self._task_updated(task)
+            return
+        try:
+            row = self.tasks.index(task)
+        except ValueError:
+            return
+        self.beginRemoveRows(QModelIndex(), row, row)
+        self.tasks.pop(row)
+        self.endRemoveRows()

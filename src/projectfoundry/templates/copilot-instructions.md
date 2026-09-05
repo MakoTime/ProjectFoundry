@@ -5,7 +5,7 @@
 - Treat `Project` as the authoritative composition root for one project.
 - Keep `Project` independently constructible for tests and tooling.
 - Use `ProjectManager` for application-level active-project or singleton behavior.
-- Registries own canonical objects, blocks, and nodes; subsystems own references and projections.
+- `Project` owns persistent blocks and project-wide lifecycle; scene/table and editor objects are runtime objects.
 - Route add, remove, connect, rename, scene, and task mutations through `Project` APIs.
 - Base classes may expose ergonomic methods, but those methods must delegate to `Project`.
 - Do not let views, Qt models, or adapters mutate registries or persistent relationships directly.
@@ -14,22 +14,35 @@
 
 - Store long-lived relationships as UIDs, never as object references.
 - Resolve related objects through `Project` or a project-owned registry at the point of use.
-- Use UIDs for object-to-block, object-to-node, tree, scene, table, task, and serializer relationships.
+- Use `block_uid` for persistent references from tree and scene/table state to block data.
 - Reject duplicate UIDs, missing UIDs, cross-project references, and invalid relationships clearly.
 - Validate relationships before mutating either side; failed operations should leave state unchanged.
-- Temporary local object references are acceptable inside one operation, task, or callback.
+- Temporary local object references are acceptable inside one operation, task, editor session, scene session, or callback.
 - Serialization must persist UIDs, not memory addresses or runtime UI objects.
+- Do not serialize temporary editor objects, scene objects, Qt rows, or renderer actors.
 
 ## Block objects
 
+- `BlockObject` owns the persistent block data and metadata for disk-backed output artifacts.
 - `prepare()` gathers and validates processing inputs without mutating committed output state.
 - `process(prepared, progress_callback)` performs computation from prepared inputs.
 - `process()` must not mutate registries, tree state, scene state, or committed block output.
-- `commit(result)` is the only processing phase that updates committed block state.
+- `commit(result)` atomically persists successful output artifacts and updates committed block metadata.
 - Run `commit()` only after successful processing; failed processing must not partially commit.
+- Keep large meshes, lines, and other shape data in separate disk-backed artifacts, not in project memory or the main project document.
+- Store artifact path, format, version, checksum, and validity metadata with the block data.
+- Load block artifacts lazily by `block_uid` when a scene object needs them.
+- Preserve the previous valid artifact if processing or artifact persistence fails.
 - A successful commit validates the block; invalid dependencies must be processed first.
 - Detect missing block tasks and dependency cycles before execution.
 - Child and parent block relationships must be created through `Project` or inherited project-aware methods.
+
+## Editor objects
+
+- `EditedObject` is a temporary edited object created from block data when an editor opens.
+- Apply validated editor changes back to the relevant block through `Project` or block APIs.
+- Destroy the edited object after apply, cancel, or editor close.
+- Do not store editor-only state on `BlockObject` or serialize the edited object.
 
 ## Dialogs and mixins
 
@@ -59,19 +72,35 @@
 
 - `TreeManager` owns tree roots and hierarchy; `TreeNode` stores UID relationships.
 - `TreeModel` delegates edits and mutations through `Project`.
-- `SceneModel` stores scene membership and selection by UID when project-backed.
-- `TableManager` stores scene rows keyed by object UID when project-backed.
-- Scene and table models resolve canonical objects through `Project` when presenting data.
-- Actors, Qt indexes, and table rows are runtime projections and are not canonical ownership.
+- One coupled scene/table manager owns scene membership, table state, and temporary scene objects.
+- Persist scene/table state separately using `block_uid`; do not persist mesh, line, or other shape payloads there.
+- Create a temporary scene object when a block is added to the scene or when persisted scene state is restored at startup.
+- Fetch shape data from the block's disk-backed artifact through `block_uid`.
+- Keep the scene and table alive for the same duration as the project.
+- Release temporary scene objects and loaded shape data during project shutdown.
+- Keep the Qt table model as a presentation adapter over the coupled scene/table manager.
+- Renderer actors are runtime resources owned by the rendering adapter, not by blocks or table rows.
 
 ## Events and lifecycle
 
 - Emit Project events only after successful mutations.
 - Events identify affected UIDs and related UIDs where applicable.
 - Do not emit success events for failed or rolled-back operations.
-- Subsystems must unsubscribe from a Project when it is replaced or shut down.
-- Removal must clean dependent tree, scene, table, task, block, and UID references.
+- The scene/table manager responds to block output, invalidation, scene-added, scene-object-created, scene-object-refreshed, and scene-object-removed events.
+- Blocks must not create or destroy scene objects.
+- Renderer adapters respond to scene/table lifecycle events and own actor cleanup.
+- Subsystems must unsubscribe from a Project when it is shut down.
+- Removal must clean dependent tree, scene/table, task, block, and UID references.
 - Repeated removal and destruction should be deterministic and harmless where practical.
+
+## Serialization
+
+- Serialize block data and artifact metadata as the primary project data.
+- Serialize tree state and coupled scene/table state as separate sections.
+- Store only `block_uid` references between those sections.
+- Load and validate blocks before loading tree or scene/table state.
+- Validate missing, duplicate, stale, and cross-project UIDs before mutating project state.
+- Use atomic writes and preserve rollback when project persistence or loading fails.
 
 ## Testing
 

@@ -1,8 +1,9 @@
 """Framework-neutral project and processing primitives."""
 
-from .block_object import BlockObject
-from .object import ObjectBase
-from .project import Project, ProjectError, ProjectEvent, UIDRegistry
+from .artifacts import ArtifactStore, ZipArtifactStore
+from .block_object import ArtifactMetadata, BlockData, BlockObject
+from .object import EditedObject
+from .project import Project, ProjectError, ProjectEvent, ProjectEventKind, UIDRegistry
 from .project_manager import ProjectManager
 from .references import UIDRef
 from .registry import TypeRegistry
@@ -10,11 +11,16 @@ from .serialization import ProjectSerializer, SerializerRegistry
 
 __all__ = [
 	"BlockObject",
-	"ObjectBase",
+	"ArtifactStore",
+	"ZipArtifactStore",
+	"BlockData",
+	"ArtifactMetadata",
+	"EditedObject",
 	"ProjectSerializer",
 	"Project",
 	"ProjectError",
 	"ProjectEvent",
+	"ProjectEventKind",
 	"ProjectManager",
 	"SerializerRegistry",
 	"TypeRegistry",

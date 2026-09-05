@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QSplitter, QVBoxLayout, QWidget
 
+from projectfoundry.project_app import ProjectContext
 from projectfoundry.scene import SceneModel
 from projectfoundry.scene_table import SceneTableModel, TableManager
 from projectfoundry.tree import TreeModel, TreeNode
@@ -22,12 +23,15 @@ class MainWindowTemplate(QMainWindow):
         self,
         roots: Iterable[TreeNode],
         *,
+        project_context: ProjectContext | None = None,
         scene_model: SceneModel | None = None,
         table_manager: TableManager | None = None,
         plotter=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.project_context = project_context
+        self.project = project_context.project if project_context is not None else None
         self.scene_model = scene_model or SceneModel()
         self.table_manager = table_manager or TableManager()
         self.tree_model = TreeModel(list(roots), self)

@@ -13,6 +13,19 @@ pytest
 ruff check .
 ```
 
+### Manual demo
+
+The manual integration application is intentionally outside the importable
+package. Run it from the repository root:
+
+```text
+.venv\Scripts\python.exe demo\main.py
+```
+
+The launcher creates and opens ZIP-based Project Foundry packages, stores recent
+project references in local application data, and passes the opened project
+context to the demo workspace. Right-click tree nodes to use their action menu.
+
 The package can be installed directly from the repository in editable mode while developing:
 
 ```text

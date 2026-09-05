@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QSlider, QTableView
 
 from projectfoundry.scene_table import SceneTableModel, TableManager
 
@@ -26,13 +27,38 @@ class SceneTableView(QTableView):
             QHeaderView.ResizeMode.ResizeToContents,
         )
         header.setSectionResizeMode(SceneTableModel.OBJECT, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(
-            SceneTableModel.PROGRESS,
-            QHeaderView.ResizeMode.ResizeToContents,
-        )
+        header.setSectionResizeMode(SceneTableModel.TRANSPARENCY, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(SceneTableModel.TRANSPARENCY, 140)
         header.setSectionResizeMode(SceneTableModel.SHAPES, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(SceneTableModel.REMOVE, QHeaderView.ResizeMode.ResizeToContents)
         self.clicked.connect(model.handle_click)
+        self.model().modelReset.connect(self._sync_sliders)
+        self.model().rowsInserted.connect(self._sync_sliders)
+        self.model().rowsRemoved.connect(self._sync_sliders)
+        self._sync_sliders()
+
+    def _sync_sliders(self, *args) -> None:
+        del args
+        model = self.model()
+        for row in range(model.rowCount()):
+            index = model.index(row, SceneTableModel.TRANSPARENCY)
+            slider = self.indexWidget(index)
+            if slider is None:
+                slider = QSlider(Qt.Orientation.Horizontal, self)
+                slider.setRange(0, 100)
+                slider.setToolTip("Set transparency")
+                slider.valueChanged.connect(
+                    lambda value, index=index: model.setData(
+                        index,
+                        value / 100,
+                        Qt.ItemDataRole.EditRole,
+                    )
+                )
+                self.setIndexWidget(index, slider)
+            slider.blockSignals(True)
+            value = model.data(index, Qt.ItemDataRole.DisplayRole)
+            slider.setValue(round(float(value) * 100))
+            slider.blockSignals(False)
 
 
 class SceneTableViewFactory:

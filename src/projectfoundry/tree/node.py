@@ -52,6 +52,31 @@ class TreeNode:
             self.child_uids.append(child.guid)
         return child
 
+    def can_add_to_scene(self) -> bool:
+        return self._project is not None and self.object_uid is not None
+
+    def create_menu(self, parent=None):
+        from .menu import TreeNodeMenuFactory
+
+        return TreeNodeMenuFactory.create(self, parent)
+
+    def add_to_scene(self) -> TreeNode:
+        if not self.can_add_to_scene():
+            raise RuntimeError("Tree node must be project-backed and reference an object")
+        self._project.add_to_scene(self.guid)
+        return self
+
+    def can_delete(self) -> bool:
+        return self._project is not None or self.parent is not None
+
+    def delete(self) -> bool:
+        if self._project is not None:
+            self._project.remove_node(self.guid)
+            return True
+        if self.parent is None:
+            return False
+        return self.parent.remove_child(self)
+
     def remove_child(self, child: TreeNode) -> bool:
         if self._project is not None and child in self.children:
             self._project.remove_node(child.guid)
