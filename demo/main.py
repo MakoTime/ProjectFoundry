@@ -127,17 +127,17 @@ class DemoWindow(QMainWindow):
         left_split.setStretchFactor(0, 2)
         left_split.setStretchFactor(1, 1)
 
-        top_split = QSplitter(Qt.Orientation.Horizontal, self)
-        top_split.addWidget(left_split)
-        top_split.addWidget(self.plotter.interactor)
-        top_split.setStretchFactor(0, 1)
-        top_split.setStretchFactor(1, 3)
+        right_split = QSplitter(Qt.Orientation.Vertical, self)
+        right_split.addWidget(self.plotter.interactor)
+        right_split.addWidget(self.table_view)
+        right_split.setStretchFactor(0, 4)
+        right_split.setStretchFactor(1, 1)
 
-        root_split = QSplitter(Qt.Orientation.Vertical, self)
-        root_split.addWidget(top_split)
-        root_split.addWidget(self.table_view)
-        root_split.setStretchFactor(0, 4)
-        root_split.setStretchFactor(1, 1)
+        root_split = QSplitter(Qt.Orientation.Horizontal, self)
+        root_split.addWidget(left_split)
+        root_split.addWidget(right_split)
+        root_split.setStretchFactor(0, 1)
+        root_split.setStretchFactor(1, 3)
         self.setCentralWidget(root_split)
 
     def _add_selected_to_scene(self) -> None:

@@ -8,4 +8,4 @@ def test_scene_table_view_factory_configures_model():
 
     assert isinstance(view, SceneTableView)
     assert view.model().rowCount() == 0
-    assert view.selectionBehavior() == view.SelectionBehavior.SelectRows
+    assert view.selectionMode() == view.SelectionMode.NoSelection

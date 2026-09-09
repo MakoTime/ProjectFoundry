@@ -14,8 +14,12 @@ class SceneTableView(QTableView):
     def __init__(self, model: SceneTableModel, parent=None) -> None:
         super().__init__(parent)
         self.setModel(model)
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, False)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.setStyleSheet(
+            "QTableView::item:hover, QTableView::item:selected "
+            "{ background-color: transparent; color: palette(text); }"
+        )
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(False)
         self.verticalHeader().setVisible(False)
@@ -29,7 +33,8 @@ class SceneTableView(QTableView):
         header.setSectionResizeMode(SceneTableModel.OBJECT, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(SceneTableModel.TRANSPARENCY, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(SceneTableModel.TRANSPARENCY, 140)
-        header.setSectionResizeMode(SceneTableModel.SHAPES, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(SceneTableModel.SHAPES, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(SceneTableModel.SHAPES, 120)
         header.setSectionResizeMode(SceneTableModel.REMOVE, QHeaderView.ResizeMode.ResizeToContents)
         self.clicked.connect(model.handle_click)
         self.model().modelReset.connect(self._sync_sliders)

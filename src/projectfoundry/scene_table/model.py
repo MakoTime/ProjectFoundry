@@ -339,10 +339,48 @@ class SceneTableModel(QAbstractTableModel):
         if self.scene_table_manager is not None:
             self.scene_table_manager.add_event_callback(self._scene_table_changed)
 
-    def _scene_table_changed(self, event: str, scene_object: SceneObject | None) -> None:
-        del event, scene_object
-        self.beginResetModel()
-        self.endResetModel()
+    def _scene_table_changed(
+        self,
+        event: ProjectEventKind,
+        scene_object: SceneObject | None,
+    ) -> None:
+        if scene_object is None:
+            self.beginResetModel()
+            self.endResetModel()
+            return
+
+        row = next(
+            (
+                row
+                for row, row_data in enumerate(self.table_manager.get_data())
+                if row_data.uid() == scene_object.scene_uid
+            ),
+            None,
+        )
+        if row is None:
+            self.beginResetModel()
+            self.endResetModel()
+            return
+
+        if event == ProjectEventKind.SCENE_OBJECT_VISIBILITY_CHANGED:
+            first_column = last_column = self.VISIBLE
+        elif event == ProjectEventKind.SCENE_OBJECT_TRANSPARENCY_CHANGED:
+            first_column = last_column = self.TRANSPARENCY
+        elif event in (
+            ProjectEventKind.SCENE_OBJECT_REFRESHED,
+            ProjectEventKind.BLOCK_INVALIDATED,
+        ):
+            first_column = 0
+            last_column = self.columnCount() - 1
+        else:
+            self.beginResetModel()
+            self.endResetModel()
+            return
+
+        self.dataChanged.emit(
+            self.index(row, first_column),
+            self.index(row, last_column),
+        )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.table_manager.get_data())
